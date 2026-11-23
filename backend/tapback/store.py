@@ -6,6 +6,7 @@ No message text is ever written here. Tokens and pairing codes are stored as SHA
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import hmac
 import secrets
@@ -13,6 +14,8 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+
+from .settings import Settings
 
 PAIR_TTL_S = 300
 PAIR_MAX_ATTEMPTS = 5
@@ -37,8 +40,31 @@ class Store:
             CREATE TABLE IF NOT EXISTS pairing (id INTEGER PRIMARY KEY CHECK (id = 1),
                 code_hash TEXT NOT NULL, expires REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS hidden (chat_id TEXT PRIMARY KEY, until REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS reply_counts (chat_id TEXT NOT NULL, reply TEXT NOT NULL,
+                n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (chat_id, reply));
             """
         )
+
+    # settings ---------------------------------------------------------------------------
+    def settings(self) -> Settings:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM kv WHERE key = 'settings'").fetchone()
+        return Settings.from_json(json.loads(row[0])) if row else Settings()
+
+    def set_settings(self, settings: Settings) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO kv(key, value) VALUES ('settings', ?)", (json.dumps(settings.to_json()),))
+
+    # reply choices (counts of the user's own picks per chat; never message text) ------------
+    def count_reply(self, chat_id: str, reply: str) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO reply_counts(chat_id, reply, n) VALUES (?, ?, 1) "
+                             "ON CONFLICT(chat_id, reply) DO UPDATE SET n = n + 1", (chat_id, reply))
+
+    def reply_counts(self, chat_id: str) -> dict[str, int]:
+        with self._lock:
+            return dict(self._db.execute("SELECT reply, n FROM reply_counts WHERE chat_id = ?", (chat_id,)))
 
     # muted / snoozed chats (hidden from the glasses until a time) -------------------
     def hide(self, chat_id: str, minutes: int) -> None:

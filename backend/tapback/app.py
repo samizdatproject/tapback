@@ -18,8 +18,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import stt
+from . import rules, stt
 from .inbox import build_inbox
+from .settings import Settings, SettingsError, in_quiet_hours
 from .store import Store
 
 Transcriber = Callable[[bytes], Awaitable[str]]
@@ -38,7 +39,7 @@ MAX_PICKED = 50
 
 
 class Telegram(Protocol):
-    async def chats(self, picked: list[str]) -> list[dict]: ...
+    async def chats(self, picked: list[str], prefs: Settings | None = None) -> list[dict]: ...
     async def card(self, chat_id: str) -> dict: ...
     async def send(self, chat_id: str, reply_to: int | None, text: str | None, reaction: str | None) -> None: ...
     async def mute(self, chat_id: str, minutes: int) -> None: ...
@@ -69,7 +70,11 @@ class Hub:
     async def inbox(self) -> dict:
         hidden = self.store.hidden()
         visible = [c for c in self.store.picked() if c not in hidden]
-        return build_inbox(await self.tg.chats(visible), visible)
+        prefs = self.store.settings()
+        inbox = build_inbox(await self.tg.chats(visible, prefs), visible)
+        # Quiet hours: the glasses show counts only and don't move on to the next card by themselves.
+        inbox["quiet"] = {"active": in_quiet_hours(prefs, datetime.now().time()), "until": prefs.quiet_end}
+        return inbox
 
     async def broadcast(self) -> None:
         if not self.sockets:
@@ -142,7 +147,9 @@ class Session:
         elif kind == "open_chat":
             cid = await self._chat(msg.get("chatId"))
             if cid is not None:
-                await self.reply(await self.hub.tg.card(cid))
+                card = await self.hub.tg.card(cid)
+                card["suggestions"] = rules.order_by_counts(card["suggestions"], self.hub.store.reply_counts(cid))
+                await self.reply(card)
         elif kind == "card_shown":
             # Telegram API terms 1.4 (no ghost mode): what the glasses actually displayed is marked read,
             # and only that, so a card that never reached the screen leaves the chat unread.
@@ -249,6 +256,9 @@ class Session:
             log.warning("send failed: %s", type(exc).__name__)  # never log the text
             return fail("Telegram didn't accept it. Try again.")
         log.info("sent a %s", "reaction" if reaction else "reply")
+        picked_reply = rules.REACT_THUMBS_UP if reaction else text
+        if picked_reply in rules.VOCABULARY:  # learn the user's own choices, never free text
+            self.hub.store.count_reply(cid, picked_reply)
         return {"type": "sent", "clientMsgId": client_id, "ok": True, "at": datetime.now().strftime("%H:%M")}
 
 
@@ -281,7 +291,21 @@ def create_app(tg: Telegram, store: Store, transcribe: Transcriber = stt.transcr
 
     @app.get("/chats", dependencies=[Depends(device)])
     async def chats() -> dict:
-        return {"chats": await tg.chats(store.picked())}
+        return {"chats": await tg.chats(store.picked(), store.settings())}
+
+    @app.get("/settings", dependencies=[Depends(device)])
+    async def get_settings() -> dict:
+        return store.settings().to_json()
+
+    @app.put("/settings", dependencies=[Depends(device)])
+    async def put_settings(body: dict) -> dict:
+        try:
+            prefs = Settings.from_json(body)
+        except SettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        store.set_settings(prefs)
+        await hub.broadcast()
+        return {"ok": True, **prefs.to_json()}
 
     @app.put("/picked", dependencies=[Depends(device)])
     async def put_picked(body: PickedBody) -> dict:

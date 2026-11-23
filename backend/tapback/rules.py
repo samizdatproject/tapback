@@ -63,5 +63,17 @@ def suggest(text: str) -> list[str]:
     return out[:MAX_SUGGESTIONS] + [REACT_THUMBS_UP]
 
 
-def is_urgent(text: str) -> bool:
-    return bool(URGENT.search(normalise(text)))
+def is_urgent(text: str, pattern: re.Pattern | None = URGENT) -> bool:
+    return bool(pattern and pattern.search(normalise(text)))
+
+
+# Every reply the rules can suggest: only these are counted when the user picks one.
+VOCABULARY = frozenset([r for _, _, replies in RULES for r in replies] + FALLBACK + [REACT_THUMBS_UP])
+
+
+def order_by_counts(suggestions: list[str], counts: dict[str, int]) -> list[str]:
+    """Replies the user picks most in this chat move up; the reaction stays last. Stable otherwise."""
+    tail = [s for s in suggestions if s == REACT_THUMBS_UP]
+    head = [s for s in suggestions if s != REACT_THUMBS_UP]
+    head.sort(key=lambda s: -counts.get(s, 0))
+    return head + tail

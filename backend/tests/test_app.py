@@ -22,7 +22,8 @@ class FakeTG:
         self.fail_send = False
         self.logout_ok = True
 
-    async def chats(self, picked):
+    async def chats(self, picked, prefs=None):
+        self.last_prefs = prefs
         return [dict(c, picked=c["id"] in picked) for c in CHATS]
 
     async def chat_kind(self, chat_id):
@@ -31,7 +32,7 @@ class FakeTG:
     async def card(self, chat_id):
         self.calls.append(("card", chat_id))
         return {"type": "card", "chat": {"id": chat_id}, "msgs": [{"id": 7}], "replyTo": None,
-                "suggestions": [], "newCount": 1, "earlier": 0, "readMaxId": 7}
+                "suggestions": ["Yes", "No", "Let me check", "React: thumbs up"], "newCount": 1, "earlier": 0, "readMaxId": 7}
 
     async def mark_read(self, chat_id, max_id):
         self.calls.append(("read", chat_id, max_id))
@@ -301,3 +302,44 @@ def test_logout_reports_when_telegram_did_not_confirm(env):
     r = client.post("/logout", headers=headers)
     assert r.status_code == 502 and "Devices" in r.json()["detail"]
     assert not store.is_device(token)  # local data is wiped either way
+
+
+# --- settings and learning -------------------------------------------------------------
+
+def test_settings_roundtrip_and_validation(env):
+    client, store, headers, token = env
+    assert client.get("/settings").status_code == 401
+    assert client.get("/settings", headers=headers).json()["quiet"]["enabled"] is False
+    body = {"vip": ["@Dana"], "keywords": ["outage"], "quiet": {"enabled": True, "start": "22:00", "end": "07:30"}}
+    r = client.put("/settings", headers=headers, json=body).json()
+    assert r["ok"] and r["vip"] == ["dana"] and r["quiet"]["end"] == "07:30"
+    assert store.settings().keywords == ["outage"]
+    bad = client.put("/settings", headers=headers, json={"quiet": {"start": "9pm"}})
+    assert bad.status_code == 400 and "HH:MM" in bad.json()["detail"]
+
+
+def test_inbox_carries_quiet_state_and_prefs_reach_flags(env):
+    client, store, headers, token = env
+    client.put("/settings", headers=headers, json={"vip": ["dana"], "quiet": {"enabled": True, "start": "00:00", "end": "23:59"}})
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_inbox"})
+    inbox = ws.receive_json()
+    assert inbox["quiet"]["until"] == "23:59" and isinstance(inbox["quiet"]["active"], bool)
+    assert client.tg.last_prefs.vip == ["dana"]
+    ws.close()
+
+
+def test_reply_choices_are_learned_per_chat(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    for i in range(2):
+        ws.send_json({"type": "send", "chatId": "-1001", "text": "Let me check", "clientMsgId": f"l{i}"})
+        assert ws.receive_json()["ok"]
+    ws.send_json({"type": "send", "chatId": "-1001", "text": "free text is never counted", "clientMsgId": "f1"})
+    assert ws.receive_json()["ok"]
+    assert store.reply_counts("-1001") == {"Let me check": 2}
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    card = _until(ws, "card")
+    assert card["suggestions"] == ["Let me check", "Yes", "No", "React: thumbs up"]
+    ws.close()

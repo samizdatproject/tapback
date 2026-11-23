@@ -28,6 +28,7 @@ from telethon.tl.types.messages import SponsoredMessages
 from . import config, rules, session_store
 from .cards import build_card
 from .digest import strip_emoji, top_posts
+from .settings import Settings, is_vip, keyword_pattern
 
 SPONSORED_CACHE_S = 300  # getSponsoredMessages: "The result must be cached for 5 minutes"
 
@@ -42,27 +43,34 @@ def chat_kind(dialog: Dialog) -> str:
     return "group"
 
 
-def chat_flag(dialog: Dialog) -> str:
-    """'!' when an unread message mentions me or the newest unread one matches an urgent keyword."""
+def chat_flag(dialog: Dialog, prefs: Settings | None = None) -> str:
+    """'!' for a mention of me or an urgent keyword in the newest unread message; '★' for a VIP sender."""
+    prefs = prefs or Settings()
     unread = int(dialog.unread_count or 0)
     if not unread:
         return ""
     if int(getattr(dialog.dialog, "unread_mentions_count", 0) or 0) > 0:
         return "!"
     last = dialog.message
-    if last is not None and not last.out and rules.is_urgent(last.message or ""):
+    if last is None or last.out:
+        return ""
+    if rules.is_urgent(last.message or "", keyword_pattern(prefs.keywords)):
         return "!"
-    return ""
+    sender = last.sender
+    names = [getattr(sender, "username", None), sender_name(last)] if sender is not None else []
+    if dialog.is_user:
+        names += [dialog.name, getattr(dialog.entity, "username", None)]
+    return "★" if is_vip(prefs, *names) else ""
 
 
-def chat_row(dialog: Dialog, picked: set[str]) -> dict:
+def chat_row(dialog: Dialog, picked: set[str], prefs: Settings | None = None) -> dict:
     cid = str(dialog.id)
     return {
         "id": cid,
         "title": dialog.title or dialog.name or "(no name)",
         "kind": chat_kind(dialog),
         "unread": int(dialog.unread_count or 0),
-        "flag": chat_flag(dialog),
+        "flag": chat_flag(dialog, prefs),
         "picked": cid in picked,
     }
 
@@ -135,11 +143,11 @@ class Telegram:
 
         self._change_task = asyncio.create_task(refresh())
 
-    async def chats(self, picked: list[str]) -> list[dict]:
+    async def chats(self, picked: list[str], prefs: Settings | None = None) -> list[dict]:
         """Main chat list only: archived chats are never offered or shown."""
         picked_set = set(picked)
         dialogs = await self.client.get_dialogs(limit=self._dialog_limit, archived=False)
-        return [chat_row(d, picked_set) for d in dialogs]
+        return [chat_row(d, picked_set, prefs) for d in dialogs]
 
     async def card(self, chat_id: str) -> dict:
         """The newest messages of one chat (up to 3 unread). Marked read later, when shown (card_shown)."""
