@@ -6,6 +6,7 @@ No message text is ever written here. Tokens and pairing codes are stored as SHA
 from __future__ import annotations
 
 import hashlib
+import os
 import hmac
 import secrets
 import sqlite3
@@ -26,8 +27,8 @@ class Store:
         self._clock = clock
         self._lock = threading.Lock()
         path = Path(path)
-        if not path.exists():
-            path.touch(mode=0o600)
+        path.touch(mode=0o600, exist_ok=True)
+        os.chmod(path, 0o600)  # also tightens a file created by an older version
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._db.executescript(
             """

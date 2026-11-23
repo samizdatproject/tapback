@@ -52,3 +52,14 @@ def test_tokens_are_not_stored_in_clear(tmp_path):
     assert not s.is_device(None) and not s.is_device("nope")
     s.forget_devices()
     assert not s.is_device(token)
+
+
+def test_database_file_is_private(tmp_path):
+    import os
+    import stat
+
+    path = tmp_path / "db.sqlite"
+    path.touch(mode=0o644)
+    os.chmod(path, 0o644)
+    Store(path)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
