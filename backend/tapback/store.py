@@ -32,8 +32,21 @@ class Store:
             CREATE TABLE IF NOT EXISTS devices (token_hash TEXT PRIMARY KEY, created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS pairing (id INTEGER PRIMARY KEY CHECK (id = 1),
                 code_hash TEXT NOT NULL, expires REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS hidden (chat_id TEXT PRIMARY KEY, until REAL NOT NULL);
             """
         )
+
+    # muted / snoozed chats (hidden from the glasses until a time) -------------------
+    def hide(self, chat_id: str, minutes: int) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO hidden(chat_id, until) VALUES (?, ?)",
+                             (chat_id, self._clock() + minutes * 60))
+
+    def hidden(self) -> set[str]:
+        with self._lock:
+            now = self._clock()
+            self._db.execute("DELETE FROM hidden WHERE until <= ?", (now,))
+            return {r[0] for r in self._db.execute("SELECT chat_id FROM hidden")}
 
     # picked chats -----------------------------------------------------------------
     def picked(self) -> list[str]:

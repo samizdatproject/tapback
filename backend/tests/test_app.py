@@ -14,14 +14,32 @@ CHATS = [
 
 
 class FakeTG:
+    def __init__(self):
+        self.sent, self.muted, self.opened = [], [], []
+        self.fail = False
+
     async def chats(self, picked):
         return [dict(c, picked=c["id"] in picked) for c in CHATS]
+
+    async def card(self, chat_id):
+        self.opened.append(chat_id)
+        return {"type": "card", "chat": {"id": chat_id}, "msgs": [], "replyTo": None, "suggestions": [], "newCount": 0, "earlier": 0}
+
+    async def send(self, chat_id, reply_to, text, reaction):
+        if self.fail:
+            raise RuntimeError("boom")
+        self.sent.append((chat_id, reply_to, text, reaction))
+
+    async def mute(self, chat_id, minutes):
+        self.muted.append((chat_id, minutes))
 
 
 @pytest.fixture
 def env(tmp_path):
     store = Store(tmp_path / "db.sqlite")
-    client = TestClient(create_app(FakeTG(), store))
+    tg = FakeTG()
+    client = TestClient(create_app(tg, store))
+    client.tg = tg
     token = client.post("/pair", json={"code": store.new_pairing_code()}).json()["token"]
     return client, store, {"Authorization": f"Bearer {token}"}, token
 
@@ -67,3 +85,70 @@ def test_websocket_rejects_unpaired(env):
         assert ws.receive_json()["code"] == "unpaired"
         with pytest.raises(WebSocketDisconnect):
             ws.receive_json()
+
+
+def _ws(client, token):
+    ws = client.websocket_connect("/ws").__enter__()
+    ws.send_json({"type": "hello", "token": token})
+    assert ws.receive_json()["type"] == "inbox"
+    return ws
+
+
+def test_open_chat_only_for_picked(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "42"})
+    assert ws.receive_json()["code"] == "not_picked"
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    assert ws.receive_json()["type"] == "card"
+    assert ws.receive_json()["type"] == "inbox"  # counts refresh after read-on-show
+    assert client.tg.opened == ["-1001"]
+    ws.close()
+
+
+def test_send_reply_dedupe_and_picked_only(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "text": " Works for me ", "clientMsgId": "a1"})
+    r = ws.receive_json()
+    assert r["ok"] and r["clientMsgId"] == "a1"
+    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "text": "again", "clientMsgId": "a1"})
+    ws.send_json({"type": "send", "chatId": "42", "text": "hi", "clientMsgId": "a2"})
+    r = ws.receive_json()
+    assert r["clientMsgId"] == "a2" and not r["ok"]
+    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "reaction": "👍", "clientMsgId": "a3"})
+    assert ws.receive_json()["ok"]
+    assert client.tg.sent == [("-1001", 5, "Works for me", None), ("-1001", 5, None, "👍")]
+    ws.close()
+
+
+def test_send_failure_and_rate_limit(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    client.tg.fail = True
+    ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": "f"})
+    assert not ws.receive_json()["ok"]
+    client.tg.fail = False
+    results = []
+    for i in range(11):
+        ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": f"r{i}"})
+        results.append(ws.receive_json()["ok"])
+    assert results.count(True) == 9 and results[-1] is False  # 10 per minute, the failed one counted
+    ws.close()
+
+
+def test_mute_and_snooze_hide_chat(env):
+    client, store, _, token = env
+    store.set_picked(["-1001", "-1002"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "mute", "chatId": "-1001", "minutes": 60})
+    assert [c["id"] for c in ws.receive_json()["chats"]] == ["-1002"]
+    assert client.tg.muted == [("-1001", 60)]
+    ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": 30})
+    assert ws.receive_json()["chats"] == []
+    ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": 9999})
+    assert ws.receive_json()["code"] == "bad_request"
+    ws.close()
