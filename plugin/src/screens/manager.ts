@@ -72,7 +72,8 @@ export class ScreenManager {
     return this.page?.id ?? null
   }
 
-  show(page: Page): void {
+  /** Resolves true once the page is on the glasses (and still the current one). */
+  show(page: Page): Promise<boolean> {
     this.page = structuredClone(page)
     this.gen++
     this.pending.clear()
@@ -126,9 +127,10 @@ export class ScreenManager {
       menuObject,
     }
 
+    const gen = this.gen
     if (!this.created) {
       this.created = true
-      this.enqueue(async () => {
+      return this.enqueue(async () => {
         const result = await this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(spec))
         console.log(`[tapback] createStartUpPageContainer(${page.id}) → ${result}`)
         if (result !== 0) {
@@ -136,14 +138,15 @@ export class ScreenManager {
             `Glasses page could not be created (code ${result}). In the simulator, restart it and reload.`,
           )
         }
-      })
-    } else {
-      this.enqueue(async () => {
-        const ok = await this.bridge.rebuildPageContainer(new RebuildPageContainer(spec))
-        console.log(`[tapback] rebuildPageContainer(${page.id}) → ${ok}`)
-        if (!ok) this.onProblem(`Glasses page "${page.id}" could not be redrawn.`)
-      })
+        return result === 0 && gen === this.gen
+      }).then(Boolean)
     }
+    return this.enqueue(async () => {
+      const ok = await this.bridge.rebuildPageContainer(new RebuildPageContainer(spec))
+      console.log(`[tapback] rebuildPageContainer(${page.id}) → ${ok}`)
+      if (!ok) this.onProblem(`Glasses page "${page.id}" could not be redrawn.`)
+      return ok && gen === this.gen
+    }).then(Boolean)
   }
 
   /** Flicker-free text update on the current page; no-op if unchanged or absent. */
@@ -159,7 +162,7 @@ export class ScreenManager {
 
   /** Root-page exit: the OS asks the user to confirm. */
   exit(): void {
-    this.enqueue(() => this.bridge.shutDownPageContainer(1))
+    void this.enqueue(() => this.bridge.shutDownPageContainer(1))
   }
 
   private flush(): void {
@@ -169,7 +172,7 @@ export class ScreenManager {
     for (const [name, content] of this.pending) {
       const id = this.ids.get(name)
       if (id === undefined) continue
-      this.enqueue(async () => {
+      void this.enqueue(async () => {
         if (gen !== this.gen) return
         await this.bridge.textContainerUpgrade(
           new TextContainerUpgrade({
@@ -183,9 +186,13 @@ export class ScreenManager {
     this.pending.clear()
   }
 
-  private enqueue(task: () => Promise<unknown>): void {
-    this.chain = this.chain.then(task).catch(err => {
+  /** Runs after every earlier call; resolves with the task's result, or undefined if it threw. */
+  private enqueue<T>(task: () => Promise<T>): Promise<T | undefined> {
+    const run = this.chain.then(task).catch(err => {
       console.error('[tapback] glasses call failed', err)
+      return undefined
     })
+    this.chain = run
+    return run
   }
 }

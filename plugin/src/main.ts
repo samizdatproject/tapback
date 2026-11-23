@@ -1,3 +1,4 @@
+import { AudioInputSource } from '@evenrealities/even_hub_sdk'
 import { connectBridge, type Input } from './bridge'
 import { mountCompanion } from './companion'
 import {
@@ -23,9 +24,11 @@ const onServer: { [K in ServerMsg['type']]: (msg: Extract<ServerMsg, { type: K }
   inbox: msg => store.set({ inbox: { chats: msg.chats, totals: msg.totals } }),
   card: ({ type: _, ...card }) => glasses?.onCard(card),
   sent: ({ type: _, ...sent }) => glasses?.onSent(sent),
-  error: msg => {
-    store.set({ notice: msg.human })
-    glasses?.onError(msg.human)
+  stt: ({ type: _, ...stt }) => glasses?.onStt(stt),
+  digest: msg => glasses?.onDigest(msg.channels),
+  error: ({ type: _, ...err }) => {
+    store.set({ notice: err.human })
+    glasses?.onError(err)
   },
 }
 
@@ -64,7 +67,7 @@ async function authed<T>(call: (base: string, token: string) => Promise<T>): Pro
 
 function onInput(input: Input): void {
   if (input.kind === 'EXIT') link?.stop()
-  if (input.kind !== 'AUDIO') glasses?.input(input)
+  glasses?.input(input)
 }
 
 mountCompanion(document.querySelector<HTMLElement>('#app')!, store, {
@@ -92,10 +95,26 @@ const [token, base] = await Promise.all([load(KEY_TOKEN), load(KEY_BACKEND)])
 store.set({ token, base: base ?? DEFAULT_BACKEND })
 
 if (bridge) {
-  glasses = new Glasses(
-    new ScreenManager(bridge, notice => store.set({ notice })),
-    msg => link?.send(msg) ?? false,
-  )
+  const b = bridge
+  glasses = new Glasses(new ScreenManager(b, notice => store.set({ notice })), {
+    send: msg => link?.send(msg) ?? false,
+    sendAudio: pcm => link?.sendBinary(pcm) ?? false,
+    async mic(on) {
+      if (!on) return b.audioControl(false).catch(() => false)
+      // Glasses mic first; the phone mic if the glasses can't (or in some hosts).
+      for (const source of [AudioInputSource.Glasses, AudioInputSource.Phone]) {
+        try {
+          if (await b.audioControl(true, source)) {
+            console.log('[tapback] mic on:', source)
+            return true
+          }
+        } catch (err) {
+          console.warn('[tapback] audioControl failed', source, err)
+        }
+      }
+      return false
+    },
+  })
   const g = glasses
   g.render(store.get())
   store.subscribe(s => g.render(s))
@@ -103,4 +122,7 @@ if (bridge) {
   store.set({ notice: 'No glasses connected: phone screen only.' })
 }
 startLink()
-window.addEventListener('beforeunload', () => link?.stop())
+window.addEventListener('beforeunload', () => {
+  glasses?.input({ kind: 'EXIT' }) // turns the mic off if a dictation is running
+  link?.stop()
+})

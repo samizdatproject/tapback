@@ -60,6 +60,8 @@ src/
     card.ts          Card page; fits messages into the lines that are on screen
     replies.ts       Quick replies page
     sending.ts       Sending page and the undo-window state machine
+    dictate.ts       dictation state machine (mic, PCM frames, transcript) and its pages
+    digest.ts        digest pages: channels, sponsored pages, sponsor info
     nav.ts           next / previous chat with unread
     text.ts          width model for the proportional glasses font
     index.ts         the glasses state machine: inputs and server replies → pages
@@ -84,7 +86,18 @@ src/
   double-tap goes back to the Inbox. The glasses menu offers Mute chat 1h and
   Snooze 30 min.
 - **Quick replies**: suggestions from the backend. Tap one to send it, or
-  double-tap to go back to the card. Dictation is not built yet.
+  double-tap to go back to the card.
+- **Dictate**: hold (long press) on a card or Quick replies and speak; release to
+  stop. Or tap "Dictate…" to start and tap again to stop. Audio streams only to
+  your own backend for transcription (15 s max). The preview sends with a tap
+  (through the same undo window) or is discarded with a double-tap. Double-tap or
+  opening the glasses menu while listening cancels, and the microphone is turned
+  off whenever dictation ends or the page changes.
+- **Digest**: the last row of the Inbox. One page per picked channel with up to
+  three top posts (first line verbatim, views and reactions). "tap done" marks
+  the channel read; pages showing the latest 24 h (nothing new) have no done.
+  A channel's sponsored message follows on its own page; its button is shown as
+  text only, and "Sponsor info" in the glasses menu shows who is behind it.
 - **Sending**: 2 s undo window (double-tap, or opening the glasses menu, cancels).
   Then `Sent ●` and the next chat with unread. A failure shows the reason with
   `tap retry`; nothing is resent without a tap.

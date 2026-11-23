@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Card, ClientMsg, InboxChat } from '../net'
+import type { Card, ClientMsg, DigestChannel, InboxChat } from '../net'
 import type { State } from '../state'
 import { Glasses } from '.'
 import type { Page, ScreenManager } from './manager'
@@ -33,13 +33,20 @@ function setup(chats = [chat('a', 1), chat('b', 2)]) {
     show: (p: Page) => {
       pages.push(p)
       pageId = p.id
+      return Promise.resolve(true)
     },
     setText: (name: string, content: string) => texts.push([name, content]),
     exit: vi.fn(),
   } as unknown as ScreenManager
-  const g = new Glasses(screens, m => (sent.push(m), true))
+  const audio: Uint8Array[] = []
+  const micCalls: boolean[] = []
+  const g = new Glasses(screens, {
+    send: m => (sent.push(m), true),
+    sendAudio: pcm => (audio.push(pcm), true),
+    mic: async on => (micCalls.push(on), true),
+  })
   g.render(state(chats))
-  return { g, pages, texts, sent, page: () => pages[pages.length - 1] }
+  return { g, pages, texts, sent, audio, micCalls, page: () => pages[pages.length - 1] }
 }
 
 beforeEach(() => vi.useFakeTimers())
@@ -67,7 +74,7 @@ describe('Glasses', () => {
   it('shows a server error instead of waiting forever', () => {
     const { g, texts } = setup()
     g.input({ kind: 'LIST_SELECT', index: 0 })
-    g.onError('That chat is not picked')
+    g.onError({ code: 'not_picked', human: 'That chat is not picked', for: 'open_chat', chatId: 'a' })
     expect(texts.at(-1)).toEqual(['hdr', 'That chat is not picked'])
     vi.advanceTimersByTime(3000)
     expect(texts.at(-1)?.[1]).toContain('TapBack')
@@ -153,5 +160,161 @@ describe('Glasses', () => {
     g.onCard(card('a'))
     g.input({ kind: 'DOUBLE' })
     expect(page().id).toBe('inbox')
+  })
+
+  it('a failed mute does not cancel the next chat that is opening', () => {
+    const { g, page } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 2 }) // mute a, then open b
+    g.onError({ code: 'bad_request', human: "Can't do that", for: 'mute', chatId: 'a' })
+    g.onCard(card('b'))
+    expect(page().id).toBe('card')
+    expect(page().texts[0].content).toContain('b')
+  })
+})
+
+describe('Glasses dictation', () => {
+  async function onCard() {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    t.g.onCard(card('a'))
+    return t
+  }
+  const flush = () => vi.advanceTimersByTimeAsync(0)
+
+  it('hold to talk: mic on, frames only while listening, release sends audio_end', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'LONG_START' })
+    await flush()
+    expect(t.micCalls).toEqual([true])
+    expect(t.sent.at(-1)).toEqual({ type: 'audio_begin' })
+    t.g.input({ kind: 'AUDIO', pcm: new Uint8Array(4) })
+    t.g.input({ kind: 'LONG_END' })
+    t.g.input({ kind: 'AUDIO', pcm: new Uint8Array(4) })
+    expect(t.audio).toHaveLength(1)
+    expect(t.micCalls).toEqual([true, false])
+    expect(t.sent.at(-1)).toEqual({ type: 'audio_end' })
+    t.g.onStt({ text: 'On my way', human: '' })
+    t.g.input({ kind: 'CLICK' })
+    expect(t.page().id).toBe('sending')
+    vi.advanceTimersByTime(2000)
+    expect(t.sent.at(-1)).toMatchObject({ type: 'send', chatId: 'a', replyTo: 7, text: 'On my way' })
+  })
+
+  it('double-tap while listening cancels and turns the mic off', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'LONG_START' })
+    await flush()
+    t.g.input({ kind: 'DOUBLE' })
+    expect(t.micCalls).toEqual([true, false])
+    expect(t.sent.at(-1)).toEqual({ type: 'audio_cancel' })
+  })
+
+  it('an audio error from the server turns the mic off', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'LONG_START' })
+    await flush()
+    t.g.onError({ code: 'failed', human: 'Recording failed', for: 'audio_begin' })
+    expect(t.micCalls).toEqual([true, false])
+    expect(t.texts.at(-1)?.[1]).toContain('Recording failed')
+  })
+
+  it('opening the menu while listening cancels and turns the mic off', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'LONG_START' })
+    await flush()
+    t.g.input({ kind: 'FG_ENTER' })
+    expect(t.micCalls).toEqual([true, false])
+    expect(t.sent.at(-1)).toEqual({ type: 'audio_cancel' })
+    vi.advanceTimersByTime(1000)
+    expect(t.page().id).toBe('card')
+  })
+
+  it('losing the connection or unpairing turns the mic off', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'LONG_START' })
+    await flush()
+    t.g.render({ ...state([chat('a', 0), chat('b', 2)]), link: 'offline' })
+    expect(t.micCalls).toEqual([true, false])
+    const u = await onCard()
+    u.g.input({ kind: 'LONG_START' })
+    await flush()
+    u.g.render({ ...state([]), token: null })
+    expect(u.micCalls).toEqual([true, false])
+  })
+
+  it('tap route from Quick replies: tap Dictate… to start, tap to stop', async () => {
+    const t = await onCard()
+    t.g.input({ kind: 'CLICK' }) // replies: Yes, Dictate…
+    t.g.input({ kind: 'LIST_SELECT', index: 1 })
+    await flush()
+    expect(t.micCalls).toEqual([true])
+    t.g.input({ kind: 'CLICK' })
+    expect(t.micCalls).toEqual([true, false])
+    t.g.onStt({ text: '', human: "Didn't catch that" })
+    expect(t.texts.at(-1)?.[1]).toContain('tap retry')
+    t.g.input({ kind: 'DOUBLE' })
+    expect(t.page().id).toBe('replies')
+  })
+})
+
+describe('Glasses digest', () => {
+  const ch = (id: string, over: Partial<DigestChannel> = {}): DigestChannel => ({
+    id, title: id, newCount: 4, recent: false, maxId: 50, sponsored: null,
+    top: [{ id: 1, text: 'post', views: 10, reactions: 1 }],
+    ...over,
+  })
+  const ad = { randomId: 'r1', label: 'Sponsored', title: 'Ad', text: 'Buy', button: 'Open', sponsorInfo: 'Foo Ltd', additionalInfo: '' }
+
+  function open(channels: DigestChannel[]) {
+    const t = setup([chat('a', 1), { id: 'c1', title: 'News', kind: 'channel', unread: 4 }])
+    t.g.input({ kind: 'LIST_SELECT', index: 2 }) // the Digest row after the two chats
+    expect(t.sent.at(-1)).toEqual({ type: 'digest_open' })
+    t.g.onDigest(channels)
+    return t
+  }
+  const flush = () => vi.advanceTimersByTimeAsync(0)
+
+  it('shows a Digest row on the Inbox', () => {
+    const t = setup([chat('a', 1), { id: 'c1', title: 'News', kind: 'channel', unread: 4 }])
+    expect(t.page().list?.items.at(-1)).toBe('Digest · 1 channel')
+  })
+
+  it('done sends digest_done once, then moves on', async () => {
+    const t = open([ch('c1'), ch('c2', { recent: true, maxId: null })])
+    t.g.input({ kind: 'CLICK' })
+    expect(t.sent.at(-1)).toEqual({ type: 'digest_done', channelId: 'c1', maxId: 50 })
+    expect(t.texts.at(-1)).toEqual(['ftr', 'Marked read ●'])
+    vi.advanceTimersByTime(800)
+    expect(t.page().texts[0].content).toContain('c2')
+    const before = t.sent.length
+    t.g.input({ kind: 'CLICK' }) // recent page: tap does nothing
+    expect(t.sent.length).toBe(before)
+  })
+
+  it('reports a sponsored view once, after the page is drawn', async () => {
+    const t = open([ch('c1', { sponsored: ad })])
+    t.g.input({ kind: 'SWIPE_DOWN' })
+    await flush()
+    t.g.input({ kind: 'SWIPE_UP' })
+    await flush()
+    t.g.input({ kind: 'SWIPE_DOWN' })
+    await flush()
+    t.g.input({ kind: 'MENU', itemId: 5 }) // Refresh digest: same ad again
+    t.g.onDigest([ch('c1', { sponsored: ad })])
+    t.g.input({ kind: 'SWIPE_DOWN' })
+    await flush()
+    expect(t.sent.filter(m => m.type === 'sponsored_viewed')).toEqual([{ type: 'sponsored_viewed', randomId: 'r1' }])
+    t.g.input({ kind: 'MENU', itemId: 4 })
+    expect(t.page().id).toBe('sponsor-info')
+    t.g.input({ kind: 'DOUBLE' })
+    expect(t.page().id).toBe('digest')
+  })
+
+  it('past the last page goes back to the Inbox', () => {
+    const t = open([ch('c1')])
+    t.g.input({ kind: 'SWIPE_DOWN' })
+    expect(t.page().id).toBe('inbox')
   })
 })

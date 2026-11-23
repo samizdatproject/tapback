@@ -15,6 +15,10 @@
     {
       "name": "g2-microphone",
       "desc": "Listens only while you hold to talk, to dictate a reply. The audio goes only to your own TapBack server for transcription."
+    },
+    {
+      "name": "phone-microphone",
+      "desc": "Used for dictating a reply only when the glasses microphone is not available. The audio goes only to your own TapBack server."
     }
   ],
   "supported_languages": ["en"]

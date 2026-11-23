@@ -38,13 +38,53 @@ export interface Card {
   earlier: number
 }
 export type SentMsg = { clientMsgId: string } & ({ ok: true; at: string } | { ok: false; human: string })
+/** Speech-to-text result; empty `text` comes with a `human` reason. */
+export interface SttMsg {
+  text: string
+  human: string
+}
+export interface DigestPost {
+  id: number
+  text: string
+  views: number
+  reactions: number
+}
+export interface Sponsored {
+  randomId: string
+  label: string
+  title: string
+  text: string
+  button: string
+  sponsorInfo: string
+  additionalInfo: string
+}
+export interface DigestChannel {
+  id: string
+  title: string
+  newCount: number
+  /** Nothing new: `top` holds the best of the last 24 h instead. */
+  recent: boolean
+  top: DigestPost[]
+  /** Highest new post id, for digest_done; null when there is nothing to mark read. */
+  maxId: number | null
+  sponsored: Sponsored | null
+}
+export interface ServerError {
+  code: string
+  human: string
+  /** The request type this error answers, and its chat or channel. */
+  for?: string
+  chatId?: string
+}
 
 /** Server → client. New members also need a case in parseServerMsg. */
 export type ServerMsg =
   | ({ type: 'inbox' } & Inbox)
   | ({ type: 'card' } & Card)
   | ({ type: 'sent' } & SentMsg)
-  | { type: 'error'; code: string; human: string }
+  | ({ type: 'stt' } & SttMsg)
+  | { type: 'digest'; channels: DigestChannel[] }
+  | ({ type: 'error' } & ServerError)
 /** Client → server. */
 export type ClientMsg =
   | { type: 'hello'; token: string }
@@ -53,6 +93,12 @@ export type ClientMsg =
   | { type: 'send'; chatId: string; replyTo: number | null; text?: string; reaction?: string; clientMsgId: string }
   | { type: 'mute'; chatId: string; minutes: number }
   | { type: 'snooze'; chatId: string; minutes: number }
+  | { type: 'audio_begin' }
+  | { type: 'audio_end' }
+  | { type: 'audio_cancel' }
+  | { type: 'digest_open' }
+  | { type: 'digest_done'; channelId: string; maxId: number }
+  | { type: 'sponsored_viewed'; randomId: string }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
@@ -85,6 +131,37 @@ function parseCard(msg: Record<string, unknown>): Card | null {
   }
 }
 
+function parseChannel(raw: unknown): DigestChannel[] {
+  const c = rec(raw)
+  if (!c || c.id == null) return []
+  const s = rec(c.sponsored)
+  return [
+    {
+      id: String(c.id),
+      title: str(c.title),
+      newCount: num(c.newCount),
+      recent: c.recent === true,
+      top: (Array.isArray(c.top) ? c.top : []).flatMap((p): DigestPost[] => {
+        const r = rec(p)
+        return r ? [{ id: num(r.id), text: str(r.text), views: num(r.views), reactions: num(r.reactions) }] : []
+      }),
+      maxId: typeof c.maxId === 'number' && Number.isInteger(c.maxId) ? c.maxId : null,
+      sponsored:
+        s && s.randomId
+          ? {
+              randomId: str(s.randomId),
+              label: str(s.label, 'Sponsored'),
+              title: str(s.title),
+              text: str(s.text),
+              button: str(s.button),
+              sponsorInfo: str(s.sponsorInfo),
+              additionalInfo: str(s.additionalInfo),
+            }
+          : null,
+    },
+  ]
+}
+
 /** Pure: a WebSocket text frame in, a typed message (or null to ignore) out. */
 export function parseServerMsg(data: unknown): ServerMsg | null {
   if (typeof data !== 'string') return null // binary frames are not used yet
@@ -115,8 +192,16 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
         ? { type: 'sent', clientMsgId, ok: true, at: str(msg.at) }
         : { type: 'sent', clientMsgId, ok: false, human: str(msg.human, 'Not sent') }
     }
-    case 'error':
-      return { type: 'error', code: str(msg.code), human: str(msg.human, 'Server error') }
+    case 'stt':
+      return { type: 'stt', text: str(msg.text).trim(), human: str(msg.human, "Didn't catch that") }
+    case 'digest':
+      return { type: 'digest', channels: (Array.isArray(msg.channels) ? msg.channels : []).flatMap(parseChannel) }
+    case 'error': {
+      const err: ServerError = { code: str(msg.code), human: str(msg.human, 'Server error') }
+      if (typeof msg.for === 'string') err.for = msg.for
+      if (msg.chatId != null && msg.chatId !== '') err.chatId = String(msg.chatId)
+      return { type: 'error', ...err }
+    }
     default:
       return null
   }
@@ -227,6 +312,13 @@ export class Link {
   send(msg: ClientMsg): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false
     this.ws.send(JSON.stringify(msg))
+    return true
+  }
+
+  /** Binary frame: raw PCM for a dictation in progress. */
+  sendBinary(bytes: Uint8Array): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false
+    this.ws.send(bytes)
     return true
   }
 

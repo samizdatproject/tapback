@@ -9,7 +9,7 @@ describe('buildReplies', () => {
       { kind: 'text', label: 'Works for me', text: 'Works for me' },
       { kind: 'text', label: 'Yes', text: 'Yes' },
       { kind: 'reaction', label: 'React: thumbs up', reaction: '👍' },
-      { kind: 'dictate', label: 'Dictate… (soon)' },
+      { kind: 'dictate', label: 'Dictate…' },
     ])
   })
 
@@ -23,7 +23,7 @@ describe('buildReplies', () => {
   })
 
   it('still offers dictation with no suggestions', () => {
-    expect(buildReplies([])).toEqual([{ kind: 'dictate', label: 'Dictate… (soon)' }])
+    expect(buildReplies([])).toEqual([{ kind: 'dictate', label: 'Dictate…' }])
   })
 })
 

@@ -1,7 +1,20 @@
 import type { Input } from '../bridge'
-import type { Card, ClientMsg, Inbox, InboxChat, SentMsg } from '../net'
+import type { Card, ClientMsg, DigestChannel, Inbox, InboxChat, SentMsg, ServerError, SttMsg } from '../net'
 import type { State } from '../state'
 import { MENU_MUTE, MENU_SNOOZE, MUTE_MINUTES, SNOOZE_MINUTES, cardHeader, cardPage } from './card'
+import { Dictation, dictatePage, dictateTarget, dictateText, type DictPhase } from './dictate'
+import {
+  MENU_BACK_TO_INBOX,
+  MENU_REFRESH_DIGEST,
+  MENU_SPONSOR_INFO,
+  digestHeader,
+  digestPage,
+  digestPages,
+  digestRow,
+  doneMessage,
+  sponsorInfoPage,
+  type DigestPage,
+} from './digest'
 import { LIST_MAX_ITEMS, bodyOf, footerText, headerText, inboxRows, planInbox, type ShownInbox } from './format'
 import { MENU_REFRESH, inboxPage } from './inbox'
 import { introPage } from './intro'
@@ -11,6 +24,7 @@ import { buildReplies, repliesHeader, repliesPage, type Reply } from './replies'
 import { SendFlow, sendingPage, sendingText, type SendPhase, type SendingContext } from './sending'
 
 const OPEN_TIMEOUT_MS = 8000
+const DIGEST_TIMEOUT_MS = 30_000 // the server fetches every channel
 const CLICK_AFTER_DOUBLE_MS = 300 // a double-tap can trail a stray single tap
 const RESULT_MS = 1000 // how long "Sent ●" / "Not sent" stay up
 
@@ -19,7 +33,27 @@ type View =
   | { name: 'inbox' }
   | { name: 'card'; card: Card }
   | { name: 'replies'; card: Card; replies: Reply[] }
-  | { name: 'sending'; card: Card; replies: Reply[]; flow: SendFlow; ctx: SendingContext }
+  | { name: 'sending'; card: Card; flow: SendFlow; ctx: SendingContext }
+  | {
+      name: 'dictate'
+      card: Card
+      from: 'card' | 'replies'
+      route: 'hold' | 'tap'
+      dict: Dictation
+      target: string
+    }
+  | { name: 'digest'; pages: DigestPage[]; index: number }
+  | { name: 'sponsor-info'; digest: Extract<View, { name: 'digest' }> }
+
+/** What the glasses controller needs from the outside world. */
+export interface GlassesIO {
+  send(msg: ClientMsg): boolean
+  sendAudio(pcm: Uint8Array): boolean
+  /** Microphone on/off; resolves false if it could not be switched on. */
+  mic(on: boolean): Promise<boolean>
+}
+
+type Pending = { for: 'open_chat' | 'digest_open'; chatId: string; title: string; timer: ReturnType<typeof setTimeout> }
 
 /** The glasses state machine: maps app state, inputs and server replies to pages. */
 export class Glasses {
@@ -32,19 +66,25 @@ export class Glasses {
   private stale = false
   private lastInbox: Inbox | null = null
   private shownChats: InboxChat[] = [] // the chats behind the rows on screen
+  private shownDigest = false // a "Digest" row follows the chats
   private inboxStatus: string | null = null
 
   // Card navigation
   private order: string[] = [] // inbox order captured when the user left the Inbox
-  private pending: { chatId: string; title: string; timer: ReturnType<typeof setTimeout> } | null = null
+  private pending: Pending | null = null
 
+  private viewedAds = new Set<string>() // sponsored randomIds already reported, across digest loads
   private lastDoubleAt = -Infinity
   private delay: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     private readonly screens: ScreenManager,
-    private readonly send: (msg: ClientMsg) => boolean,
+    private readonly io: GlassesIO,
   ) {}
+
+  private send(msg: ClientMsg): boolean {
+    return this.io.send(msg)
+  }
 
   private get chats(): InboxChat[] {
     return this.state?.inbox?.chats ?? []
@@ -54,10 +94,11 @@ export class Glasses {
     this.state = state
     if (!state.token) {
       this.reset()
-      if (this.screens.pageId !== 'intro') this.screens.show(introPage())
+      if (this.screens.pageId !== 'intro') void this.screens.show(introPage())
       return
     }
     if (this.view.name === 'intro') this.view = { name: 'inbox' }
+    if (this.view.name === 'dictate' && state.link !== 'online') this.view.dict.fail('Connection lost. Not recorded.')
     if (this.view.name !== 'inbox') {
       // Other pages read the latest state when they need it. Tracking the inbox
       // here keeps the next *new* one counting as re-entry (see toInbox).
@@ -65,13 +106,17 @@ export class Glasses {
       return
     }
 
-    const rows = state.inbox ? inboxRows(state.inbox.chats) : null
+    const all = state.inbox?.chats ?? []
+    const digest = digestRow(all)
+    const chats = all.slice(0, LIST_MAX_ITEMS - (digest ? 1 : 0))
+    const rows = state.inbox ? [...inboxRows(chats), ...(digest ? [digest] : [])] : null
     const plan = this.screens.pageId === 'inbox' ? planInbox(this.shown, rows, this.entry) : 'rebuild'
     this.stale = plan === 'stale'
     if (plan === 'rebuild') {
       this.shown = { body: bodyOf(rows), rows: rows ?? [] }
-      this.shownChats = state.inbox?.chats.slice(0, LIST_MAX_ITEMS) ?? []
-      this.screens.show(inboxPage(state, rows, false))
+      this.shownChats = chats
+      this.shownDigest = digest !== null
+      void this.screens.show(inboxPage(state, rows, false))
     }
     if (state.inbox && state.inbox !== this.lastInbox) this.entry = false
     this.lastInbox = state.inbox
@@ -86,6 +131,10 @@ export class Glasses {
   }
 
   input(input: Input): void {
+    if (input.kind === 'AUDIO') {
+      if (this.view.name === 'dictate') this.view.dict.frame(input.pcm)
+      return
+    }
     const now = Date.now()
     if (input.kind === 'DOUBLE') this.lastDoubleAt = now
     else if ((input.kind === 'CLICK' || input.kind === 'LIST_SELECT') && now - this.lastDoubleAt < CLICK_AFTER_DOUBLE_MS) {
@@ -108,6 +157,7 @@ export class Glasses {
         else if (input.kind === 'LIST_SELECT') {
           const chat = this.shownChats[input.index]
           if (chat) this.open(chat)
+          else if (this.shownDigest && input.index === this.shownChats.length) this.openDigest()
         } else if (input.kind === 'MENU' && input.itemId === MENU_REFRESH) {
           this.refresh()
           this.send({ type: 'open_inbox' })
@@ -118,6 +168,7 @@ export class Glasses {
         else if (input.kind === 'SWIPE_DOWN') this.step(view.card.chat.id, 1)
         else if (input.kind === 'SWIPE_UP') this.step(view.card.chat.id, -1)
         else if (input.kind === 'DOUBLE') this.toInbox()
+        else if (input.kind === 'LONG_START') this.startDictation(view.card, 'card', 'hold')
         else if (input.kind === 'MENU' && (input.itemId === MENU_MUTE || input.itemId === MENU_SNOOZE)) {
           const chatId = view.card.chat.id
           const mute = input.itemId === MENU_MUTE
@@ -127,10 +178,11 @@ export class Glasses {
         break
       case 'replies':
         if (input.kind === 'DOUBLE') this.showCard(view.card)
+        else if (input.kind === 'LONG_START') this.startDictation(view.card, 'replies', 'hold')
         else if (input.kind === 'LIST_SELECT') {
           const reply = view.replies[input.index]
-          if (reply?.kind === 'dictate') this.screens.setText('ftr', 'Dictation is coming soon · 2x back')
-          else if (reply) this.startSending(view.card, view.replies, reply)
+          if (reply?.kind === 'dictate') this.startDictation(view.card, 'replies', 'tap')
+          else if (reply) this.startSending(view.card, reply)
         }
         break
       case 'sending': {
@@ -141,7 +193,55 @@ export class Glasses {
         else if (phase === 'sent' && input.kind === 'DOUBLE') this.toInbox()
         break
       }
+      case 'dictate': {
+        const { dict } = view
+        const phase = dict.phase.phase
+        if (dict.active) {
+          if (input.kind === 'DOUBLE' || input.kind === 'FG_ENTER') dict.cancel()
+          else if (view.route === 'hold' ? input.kind === 'LONG_END' : input.kind === 'CLICK') dict.stop()
+        } else if (input.kind === 'DOUBLE' && phase !== 'cancelled') this.backFromDictation(view)
+        else if (input.kind === 'CLICK' && phase === 'preview') {
+          const text = (dict.phase as Extract<DictPhase, { phase: 'preview' }>).text
+          this.startSending(view.card, { kind: 'text', label: text, text })
+        } else if (input.kind === 'CLICK' && phase === 'empty') this.startDictation(view.card, view.from, 'tap')
+        break
+      }
+      case 'digest': {
+        const page = view.pages[view.index]
+        if (input.kind === 'SWIPE_DOWN') this.showDigestPage(view, view.index + 1)
+        else if (input.kind === 'SWIPE_UP' && view.index > 0) this.showDigestPage(view, view.index - 1)
+        else if (input.kind === 'DOUBLE') this.toInbox()
+        else if (input.kind === 'CLICK') this.digestDone(view)
+        else if (input.kind === 'MENU') {
+          if (input.itemId === MENU_REFRESH_DIGEST) this.openDigest()
+          else if (input.itemId === MENU_BACK_TO_INBOX) this.toInbox()
+          else if (input.itemId === MENU_SPONSOR_INFO && page?.kind === 'sponsored') {
+            this.leave()
+            this.view = { name: 'sponsor-info', digest: view }
+            void this.screens.show(sponsorInfoPage(page.ad))
+          }
+        }
+        break
+      }
+      case 'sponsor-info':
+        if (input.kind === 'DOUBLE') this.showDigestPage(view.digest, view.digest.index)
+        break
     }
+  }
+
+  onStt(msg: SttMsg): void {
+    if (this.view.name === 'dictate') this.view.dict.onStt(msg)
+  }
+
+  onDigest(channels: DigestChannel[]): void {
+    if (this.pending?.for !== 'digest_open') return
+    this.clearPending()
+    const pages = digestPages(channels)
+    if (pages.length === 0) {
+      this.flash('No channels picked for the digest')
+      return
+    }
+    this.showDigestPage({ name: 'digest', pages, index: 0 }, 0)
   }
 
   onCard(card: Card): void {
@@ -154,12 +254,18 @@ export class Glasses {
     if (this.view.name === 'sending') this.view.flow.ack(msg)
   }
 
-  onError(human: string): void {
-    if (this.pending) {
+  /** Errors name the request they answer (`for`), so each lands on the flow that sent it. */
+  onError(err: ServerError): void {
+    const p = this.pending
+    if (p && (err.for === undefined || (err.for === p.for && (!err.chatId || err.chatId === p.chatId)))) {
       this.clearPending()
-      this.openFailed(human)
-    } else if (this.view.name === 'sending') {
-      this.view.flow.fail(human)
+      this.openFailed(err.human)
+    } else if (this.view.name === 'sending' && (err.for === undefined || err.for === 'send')) {
+      this.view.flow.fail(err.human)
+    } else if (this.view.name === 'dictate' && (err.for === undefined || err.for.startsWith('audio_'))) {
+      this.view.dict.fail(err.human)
+    } else if ((err.for === 'mute' || err.for === 'snooze') && !p) {
+      this.flash(`Couldn't ${err.for}: ${err.human}`)
     }
   }
 
@@ -169,16 +275,32 @@ export class Glasses {
     if (this.view.name === 'inbox') this.order = this.chats.map(c => c.id)
     this.leave()
     const title = chat.title.trim() || 'chat'
-    if (!this.send({ type: 'open_chat', chatId: chat.id })) {
+    this.request({ type: 'open_chat', chatId: chat.id }, chat.id, `Opening ${title}…`, `Couldn't open ${title}`, OPEN_TIMEOUT_MS)
+  }
+
+  private openDigest(): void {
+    this.leave()
+    this.request({ type: 'digest_open' }, '', 'Loading digest…', "Couldn't load the digest", DIGEST_TIMEOUT_MS)
+  }
+
+  /** Sends a request whose answer replaces the page; until then, shows `waiting`. */
+  private request(
+    msg: Extract<ClientMsg, { type: Pending['for'] }>,
+    chatId: string,
+    waiting: string,
+    failed: string,
+    timeoutMs: number,
+  ): void {
+    if (!this.send(msg)) {
       this.openFailed('Offline · try again in a moment')
       return
     }
     const timer = setTimeout(() => {
       this.pending = null
-      this.openFailed(`Couldn't open ${title}`)
-    }, OPEN_TIMEOUT_MS)
-    this.pending = { chatId: chat.id, title, timer }
-    this.status(`Opening ${title}…`)
+      this.openFailed(failed)
+    }, timeoutMs)
+    this.pending = { for: msg.type, chatId, title: waiting, timer }
+    this.status(waiting)
   }
 
   /** After "Sent ●" there is nothing to go back to, so a failed open lands on the Inbox. */
@@ -196,14 +318,67 @@ export class Glasses {
   private showCard(card: Card): void {
     this.leave()
     this.view = { name: 'card', card }
-    this.screens.show(cardPage(card, position(this.order, this.chats, card.chat.id)))
+    void this.screens.show(cardPage(card, position(this.order, this.chats, card.chat.id)))
+  }
+
+  private startDictation(card: Card, from: 'card' | 'replies', route: 'hold' | 'tap'): void {
+    this.leave()
+    const target = dictateTarget(card.chat.title.trim() || 'chat', card.replyTo?.sender.trim() || null)
+    const dict: Dictation = new Dictation({
+      mic: on => this.io.mic(on),
+      send: msg => this.send(msg),
+      sendAudio: pcm => this.io.sendAudio(pcm),
+      onChange: phase => this.onDictPhase(dict, phase),
+    })
+    this.view = { name: 'dictate', card, from, route, dict, target }
+    void this.screens.show(dictatePage(dictateText(dict.phase, target, route)))
+    void dict.start()
+  }
+
+  private onDictPhase(dict: Dictation, phase: DictPhase): void {
+    const view = this.view
+    if (view.name !== 'dictate' || view.dict !== dict) return
+    if (phase.phase === 'cancelled') this.later(() => this.backFromDictation(view))
+    this.screens.setText('msg', dictateText(phase, view.target, view.route))
+  }
+
+  private backFromDictation(view: Extract<View, { name: 'dictate' }>): void {
+    if (view.from === 'card') this.showCard(view.card)
+    else this.showReplies(view.card)
+  }
+
+  private showDigestPage(view: Extract<View, { name: 'digest' }>, index: number): void {
+    const page = view.pages[index]
+    if (!page) {
+      this.toInbox()
+      return
+    }
+    this.leave()
+    view.index = index
+    this.view = view
+    void this.screens.show(digestPage(page)).then(drawn => {
+      // Telegram counts an ad view only once it was really on screen, and only once.
+      if (!drawn || page.kind !== 'sponsored' || this.view !== view || view.index !== index) return
+      if (this.viewedAds.has(page.ad.randomId)) return
+      this.viewedAds.add(page.ad.randomId)
+      this.send({ type: 'sponsored_viewed', randomId: page.ad.randomId })
+    })
+  }
+
+  private digestDone(view: Extract<View, { name: 'digest' }>): void {
+    const page = view.pages[view.index]
+    const msg = doneMessage(page)
+    if (!page || !msg || !this.send(msg)) return
+    page.channel.maxId = null // done once; the page no longer offers it
+    this.screens.setText('ftr', 'Marked read ●')
+    this.later(() => this.showDigestPage(view, view.index + 1), 800)
   }
 
   private showReplies(card: Card): void {
     this.leave()
     const replies = buildReplies(card.suggestions)
     this.view = { name: 'replies', card, replies }
-    this.screens.show(repliesPage(card, replies))
+    void this.screens.show(repliesPage(card, replies))
   }
 
   private toInbox(): void {
@@ -215,7 +390,7 @@ export class Glasses {
     if (this.state) this.render(this.state) // not on the Inbox page, so this rebuilds it
   }
 
-  private startSending(card: Card, replies: Reply[], reply: Reply): void {
+  private startSending(card: Card, reply: Reply): void {
     this.leave()
     const ctx: SendingContext = {
       chatTitle: card.chat.title.trim() || 'chat',
@@ -236,8 +411,8 @@ export class Glasses {
         }),
       onChange: phase => this.onSendPhase(flow, phase),
     })
-    this.view = { name: 'sending', card, replies, flow, ctx }
-    this.screens.show(sendingPage(sendingText(ctx, flow.phase)))
+    this.view = { name: 'sending', card, flow, ctx }
+    void this.screens.show(sendingPage(sendingText(ctx, flow.phase)))
     flow.start()
   }
 
@@ -271,8 +446,14 @@ export class Glasses {
         this.screens.setText('hdr', text ?? repliesHeader(view.card))
         break
       case 'sending':
+      case 'dictate':
         if (text) this.screens.setText('msg', text)
         break
+      case 'digest': {
+        const page = view.pages[view.index]
+        if (page) this.screens.setText('hdr', text ?? digestHeader(page))
+        break
+      }
     }
   }
 
@@ -301,6 +482,7 @@ export class Glasses {
     this.delay = null
     this.clearPending()
     if (this.view.name === 'sending') this.view.flow.dispose()
+    if (this.view.name === 'dictate') this.view.dict.dispose() // the mic never outlives its page
   }
 
   private reset(): void {

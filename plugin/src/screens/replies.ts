@@ -10,7 +10,7 @@ export type Reply =
 
 const REACTION_LABEL = /^react:\s*thumbs up$/i
 
-/** Server suggestions → list items, ending with the (not yet working) dictate item. */
+/** Server suggestions → list items, ending with "Dictate…" (tap to start, tap to stop). */
 export function buildReplies(suggestions: string[]): Reply[] {
   const seen = new Set<string>()
   const out: Reply[] = []
@@ -21,7 +21,7 @@ export function buildReplies(suggestions: string[]): Reply[] {
     const label = fit(text, ROW_MAX_CHARS, ROW_MAX_BYTES)
     out.push(REACTION_LABEL.test(text) ? { kind: 'reaction', label, reaction: '👍' } : { kind: 'text', label, text })
   }
-  return [...out.slice(0, LIST_MAX_ITEMS - 1), { kind: 'dictate', label: 'Dictate… (soon)' }]
+  return [...out.slice(0, LIST_MAX_ITEMS - 1), { kind: 'dictate', label: 'Dictate…' }]
 }
 
 export function repliesHeader(card: Card): string {
