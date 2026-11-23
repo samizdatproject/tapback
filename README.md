@@ -10,6 +10,21 @@ Built for the [Heads Up: Even Realities hackathon](https://dorahacks.io/hackatho
 
 > Work in progress during the build week. This README grows with the code.
 
+## On the glasses
+
+Real screens from the Even Hub simulator (576×288), running against a real Telegram account with demo chats.
+
+| | |
+|---|---|
+| ![Inbox: only picked chats, urgent ones first](docs/screens/1-inbox.png) | ![Card: the newest messages of one chat](docs/screens/2-card.png) |
+| **Inbox.** Only the chats you picked. `!` marks a mention or an urgent word, and those come first. | **Card.** The newest 1–3 messages. Shown means read, as Telegram's rules require. |
+| ![Quick replies from published rules](docs/screens/3-replies.png) | ![Two-second undo before sending](docs/screens/4-undo.png) |
+| **Quick replies.** "Where are you?" gets "On my way"; a meeting time gets "Works for me". Rules, not AI. | **Undo.** Every send waits 2 seconds. Double-tap, or opening the menu, cancels it. |
+| ![Sent, then the next chat](docs/screens/5-sent.png) | ![Dictated reply, transcribed locally](docs/screens/6-dictation.png) |
+| **Sent.** Then the next chat with unread messages opens. | **Hold to talk.** Transcribed by whisper.cpp on your own machine. You confirm before it sends. |
+| ![Digest: top posts by engagement](docs/screens/7-digest.png) | |
+| **Digest.** The top 3 posts per channel by views, reactions and forwards, first line verbatim. Each channel's sponsored message follows on its own page. | |
+
 ## How it works
 
 ```
