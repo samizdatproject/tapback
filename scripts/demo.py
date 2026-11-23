@@ -148,7 +148,8 @@ class Demo:
         for i in range(3):
             self.tap("down", 2.5)
             self.shot(f"digest-{i + 2}")
-        self.tap("double_click", 1.5)
+        # No double-tap here: past the last page the digest is already back on the Inbox,
+        # where a double-tap opens the exit dialog.
         print("\nDone.")
 
 
