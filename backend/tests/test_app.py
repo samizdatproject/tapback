@@ -48,7 +48,12 @@ class FakeTG:
 def env(tmp_path):
     store = Store(tmp_path / "db.sqlite")
     tg = FakeTG()
-    client = TestClient(create_app(tg, store))
+    async def fake_stt(pcm):
+        if pcm[:1] == b"x":
+            raise RuntimeError("offline")
+        return f"heard {len(pcm)} bytes"
+
+    client = TestClient(create_app(tg, store, fake_stt))
     client.tg = tg
     token = client.post("/pair", json={"code": store.new_pairing_code()}).json()["token"]
     return client, store, {"Authorization": f"Bearer {token}"}, token
@@ -178,4 +183,24 @@ def test_digest_only_picked_channels_and_explicit_done(env):
     ws.send_json({"type": "open_inbox"})
     assert ws.receive_json()["type"] == "inbox"
     assert client.tg.muted == [("read", "-1002", 9), ("view", "abc")]
+    ws.close()
+
+
+def test_dictation_roundtrip(env):
+    client, store, _, token = env
+    ws = _ws(client, token)
+    ws.send_json({"type": "audio_begin"})
+    for _ in range(10):
+        ws.send_bytes(b"\0" * 3200)  # 10 x 100 ms
+    ws.send_json({"type": "audio_end"})
+    assert ws.receive_json() == {"type": "stt", "text": "heard 32000 bytes", "human": ""}
+    ws.send_json({"type": "audio_begin"})
+    ws.send_bytes(b"\0" * 100)
+    ws.send_json({"type": "audio_end"})
+    assert ws.receive_json()["human"].startswith("Too short")
+    ws.send_bytes(b"\0" * 32000)  # no dictation in progress: ignored
+    ws.send_json({"type": "audio_begin"})
+    ws.send_bytes(b"x" * 32000)
+    ws.send_json({"type": "audio_end"})
+    assert ws.receive_json()["human"] == "Speech-to-text is offline"
     ws.close()

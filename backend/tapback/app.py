@@ -12,14 +12,17 @@ import logging
 import time
 from collections import deque
 from datetime import datetime
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from . import stt
 from .inbox import build_inbox
 from .store import Store
+
+Transcriber = Callable[[bytes], Awaitable[str]]
 
 log = logging.getLogger("tapback.app")
 
@@ -53,8 +56,8 @@ class PickedBody(BaseModel):
 class Hub:
     """Connected glasses clients; pushes a fresh inbox to all of them on change."""
 
-    def __init__(self, tg: Telegram, store: Store):
-        self.tg, self.store = tg, store
+    def __init__(self, tg: Telegram, store: Store, transcribe: Transcriber):
+        self.tg, self.store, self.transcribe = tg, store, transcribe
         self.sockets: set[WebSocket] = set()
 
     async def inbox(self) -> dict:
@@ -80,6 +83,10 @@ class Session:
         self.hub, self.ws = hub, ws
         self.sends: deque[float] = deque()
         self.seen_ids: deque[str] = deque(maxlen=100)
+        self.recorder = stt.Recorder()
+
+    async def audio(self, chunk: bytes) -> None:
+        self.recorder.add(chunk)
 
     async def reply(self, msg: dict) -> None:
         await self.ws.send_text(json.dumps(msg))
@@ -113,6 +120,22 @@ class Session:
             if cid is not None and isinstance(msg.get("maxId"), int):
                 await self.hub.tg.mark_read(cid, msg["maxId"])
                 await self.hub.broadcast()
+        elif kind == "audio_begin":
+            self.recorder.begin()
+        elif kind == "audio_cancel":
+            self.recorder.cancel()
+        elif kind == "audio_end":
+            pcm = self.recorder.end()
+            if pcm is None:
+                await self.reply({"type": "stt", "text": "", "human": "Too short. Hold while you speak."})
+                return
+            try:
+                text = await self.hub.transcribe(pcm)
+            except Exception as exc:
+                log.warning("speech-to-text failed: %s", type(exc).__name__)
+                await self.reply({"type": "stt", "text": "", "human": "Speech-to-text is offline"})
+                return
+            await self.reply({"type": "stt", "text": text, "human": "" if text else "Didn't catch that"})
         elif kind == "sponsored_viewed":
             await self.hub.tg.view_sponsored(str(msg.get("randomId") or ""))
         elif kind in ("mute", "snooze"):
@@ -162,13 +185,13 @@ class Session:
         await self.reply({"type": "sent", "clientMsgId": client_id, "ok": True, "at": datetime.now().strftime("%H:%M")})
 
 
-def create_app(tg: Telegram, store: Store) -> FastAPI:
+def create_app(tg: Telegram, store: Store, transcribe: Transcriber = stt.transcribe) -> FastAPI:
     app = FastAPI(title="TapBack backend", docs_url=None, redoc_url=None, openapi_url=None)
     # The plugin runs in a WebView whose origin differs per platform; access is
     # controlled by the device token, not by origin, and no cookies are used.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "PUT"],
                        allow_headers=["Authorization", "Content-Type"])
-    hub = Hub(tg, store)
+    hub = Hub(tg, store, transcribe)
     app.state.hub = hub
 
     def device(authorization: str | None = Header(default=None)) -> None:
@@ -211,7 +234,13 @@ def create_app(tg: Telegram, store: Store) -> FastAPI:
             session = Session(hub, ws)
             await ws.send_text(json.dumps(await hub.inbox()))
             while True:
-                msg = json.loads(await ws.receive_text())
+                frame = await ws.receive()
+                if frame["type"] == "websocket.disconnect":
+                    break
+                if frame.get("bytes") is not None:  # PCM audio for a dictation in progress
+                    await session.audio(frame["bytes"])
+                    continue
+                msg = json.loads(frame.get("text") or "null")
                 try:
                     await session.handle(msg if isinstance(msg, dict) else {})
                 except (WebSocketDisconnect, asyncio.CancelledError):
