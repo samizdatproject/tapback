@@ -10,7 +10,7 @@ Built for the [Heads Up: Even Realities hackathon](https://dorahacks.io/hackatho
 
 > Work in progress during the build week. This README grows with the code.
 
-**▶ [Watch the demo video](https://samizdatproject.github.io/tapback/tapback-demo.mp4)** (80 s, captions only; file: [`docs/tapback-demo.mp4`](docs/tapback-demo.mp4)). Every glasses frame in it is a real capture from the Even Hub simulator running against a real Telegram account with demo chats.
+**▶ [Watch the demo video](https://samizdatproject.github.io/tapback/tapback-demo.mp4)** (72 s, captions only; file: [`docs/tapback-demo.mp4`](docs/tapback-demo.mp4)). Recorded in one take: the Even Hub simulator on the left, Telegram Desktop on the same real account on the right, with demo chats.
 
 ## On the glasses
 
