@@ -43,6 +43,20 @@ G2 glasses ──BLE── Even Realities app (WebView: TapBack plugin, Vite + T
 - **Glance, tap, tap.** A new message from a picked chat shows as a card. Opening it marks it read, as Telegram's rules require (no "ghost mode"). One tap opens reply suggestions; a second tap sends after a 2-second undo window.
 - **Hold to talk.** Dictation goes to whisper.cpp on your own machine. You see the transcript and confirm before anything is sent.
 - **Digest.** The top 3 new posts per picked channel, ranked by views, reactions and forwards, shown verbatim. Telegram's sponsored messages are shown where Telegram returns them.
+- **Your rules.** VIP senders get `★`, your urgent words get `!`, and both come first. Quiet hours turn the glasses into counts only. Reply suggestions you pick most in a chat move to the top there (only counts of your own choices are kept, never message text).
+
+## Who it's for, and the path to launch
+
+**Users.** People whose work runs through a few Telegram chats inside a big, noisy account: crypto traders and fund teams, founders, community and support managers, on-call engineers. Telegram is where much of crypto and a large part of the tech world coordinates, and these users already pay for tools that save them attention.
+
+**Why they'd switch from the phone.** The phone shows everything; TapBack shows only what they picked, and a reply takes two taps without looking down. No AI touches their messages, which matters to exactly these users (deal flow, trading, ops).
+
+**Path to launch on Even Hub.**
+1. **Now:** an Even Hub plugin plus a one-command self-hosted backend (`scripts/run-local.sh`), for technical users and teams who run their own servers.
+2. **Next:** an optional hosted backend, one isolated instance per user (their own encrypted session, no shared message store), as a paid subscription for people who won't self-host. The plugin stays free.
+3. **Then:** Slack and Discord through the same card and reply engine (both are in the same track's app list), so one glanceable inbox covers a person's work chats.
+
+**Why it can ship.** It follows Telegram's API terms by design (own api_id, "unofficial" naming, read receipts honoured, sponsored messages shown, no AI on Telegram data), so it can be listed without depending on rules being loosened later.
 
 ## Privacy and Telegram's terms
 
