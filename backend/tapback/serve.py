@@ -31,10 +31,17 @@ async def _serve(host: str, port: int) -> None:
     print(f"Listening on http://{host}:{port}")
     print(f"Pairing code (valid 5 minutes): {store.new_pairing_code()}   New code: python -m tapback pair")
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+
+    def shutdown() -> None:
+        print("Logged out of Telegram and wiped the session. Run `python -m tapback login` to start again.")
+        server.should_exit = True
+
+    app.state.shutdown = shutdown
     try:
         await server.serve()
     finally:
-        await tg.stop()
+        if tg.client.is_connected():
+            await tg.stop()
 
 
 def main(argv: list[str] | None = None) -> None:

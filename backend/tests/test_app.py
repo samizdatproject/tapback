@@ -39,6 +39,9 @@ class FakeTG:
     async def mark_read(self, chat_id, max_id):
         self.muted.append(("read", chat_id, max_id))
 
+    async def log_out(self):
+        self.muted.append("logout")
+
     async def view_sponsored(self, rid):
         self.muted.append(("view", rid))
         return True
@@ -63,6 +66,8 @@ def test_build_inbox_picked_only_unread_first():
     inbox = build_inbox([dict(c) for c in CHATS], ["42", "-1001"])
     assert [c["title"] for c in inbox["chats"]] == ["Acme Work", "Alice"]
     assert inbox["totals"] == {"unread": 2, "chats": 1}
+    flagged = build_inbox([dict(c, flag="!" if c["id"] == "42" else "") for c in CHATS], ["-1001", "42"])
+    assert [c["title"] for c in flagged["chats"]] == ["Alice", "Acme Work"]
     assert "picked" not in inbox["chats"][0]
 
 
@@ -205,3 +210,13 @@ def test_dictation_roundtrip(env):
     ws.send_json({"type": "audio_end"})
     assert ws.receive_json()["human"] == "Speech-to-text is offline"
     ws.close()
+
+
+def test_logout_wipes_devices_and_picks(env):
+    client, store, headers, token = env
+    store.set_picked(["-1001"])
+    assert client.post("/logout").status_code == 401
+    assert client.post("/logout", headers=headers).json() == {"ok": True}
+    assert client.tg.muted == ["logout"]
+    assert store.picked() == [] and not store.is_device(token)
+    assert client.get("/chats", headers=headers).status_code == 401

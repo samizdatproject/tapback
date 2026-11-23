@@ -25,7 +25,7 @@ from telethon.tl.functions.messages import (
 from telethon.tl.types import InputNotifyPeer, InputPeerNotifySettings, ReactionEmoji
 from telethon.tl.types.messages import SponsoredMessages
 
-from . import config, session_store
+from . import config, rules, session_store
 from .cards import build_card
 from .digest import strip_emoji, top_posts
 
@@ -42,6 +42,19 @@ def chat_kind(dialog: Dialog) -> str:
     return "group"
 
 
+def chat_flag(dialog: Dialog) -> str:
+    """'!' when an unread message mentions me or the newest unread one matches an urgent keyword."""
+    unread = int(dialog.unread_count or 0)
+    if not unread:
+        return ""
+    if int(getattr(dialog.dialog, "unread_mentions_count", 0) or 0) > 0:
+        return "!"
+    last = dialog.message
+    if last is not None and not last.out and rules.is_urgent(last.message or ""):
+        return "!"
+    return ""
+
+
 def chat_row(dialog: Dialog, picked: set[str]) -> dict:
     cid = str(dialog.id)
     return {
@@ -49,6 +62,7 @@ def chat_row(dialog: Dialog, picked: set[str]) -> dict:
         "title": dialog.title or dialog.name or "(no name)",
         "kind": chat_kind(dialog),
         "unread": int(dialog.unread_count or 0),
+        "flag": chat_flag(dialog),
         "picked": cid in picked,
     }
 
@@ -243,3 +257,10 @@ class Telegram:
     async def mark_read(self, chat_id: str, max_id: int) -> None:
         entity = await self.client.get_entity(int(chat_id))
         await self.client.send_read_acknowledge(entity, max_id=max_id)
+
+    async def log_out(self) -> None:
+        """Ends this Telegram session on Telegram's side (auth.logOut) and wipes it locally."""
+        try:
+            await self.client.log_out()
+        finally:
+            session_store.wipe(self._cfg.session_file, self._cfg.key_file)

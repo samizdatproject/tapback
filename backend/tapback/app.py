@@ -43,6 +43,7 @@ class Telegram(Protocol):
     async def digest(self, channel_ids: list[str]) -> list[dict]: ...
     async def mark_read(self, chat_id: str, max_id: int) -> None: ...
     async def view_sponsored(self, random_id_b64: str) -> bool: ...
+    async def log_out(self) -> None: ...
 
 
 class PairBody(BaseModel):
@@ -197,6 +198,7 @@ def create_app(tg: Telegram, store: Store, transcribe: Transcriber = stt.transcr
                        allow_headers=["Authorization", "Content-Type"])
     hub = Hub(tg, store, transcribe)
     app.state.hub = hub
+    app.state.shutdown = None  # set by serve.py so a logout also stops the server
 
     def device(authorization: str | None = Header(default=None)) -> None:
         token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
@@ -223,6 +225,23 @@ def create_app(tg: Telegram, store: Store, transcribe: Transcriber = stt.transcr
     async def put_picked(body: PickedBody) -> dict:
         store.set_picked(body.chatIds[:50])
         await hub.broadcast()
+        return {"ok": True}
+
+    @app.post("/logout", dependencies=[Depends(device)])
+    async def logout() -> dict:
+        """Log out & wipe: ends the Telegram session, deletes it, forgets every paired device."""
+        await tg.log_out()
+        store.forget_devices()
+        store.set_picked([])
+        log.info("logged out and wiped")
+        for ws in list(hub.sockets):
+            try:
+                await ws.close(code=4401)
+            except Exception:
+                pass
+        hub.sockets.clear()
+        if app.state.shutdown is not None:
+            app.state.shutdown()
         return {"ok": True}
 
     @app.websocket("/ws")

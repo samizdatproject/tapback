@@ -4,14 +4,15 @@ from __future__ import annotations
 
 
 def build_inbox(chats: list[dict], picked: list[str]) -> dict:
-    """Only picked chats; unread first, then the user's pick order."""
+    """Only picked chats; flagged first, then unread, then the user's pick order."""
     order = {cid: i for i, cid in enumerate(picked)}
     rows = [
-        {k: c[k] for k in ("id", "title", "kind", "unread")}
+        {"id": c["id"], "title": c["title"], "kind": c["kind"], "unread": c["unread"], "flag": c.get("flag", "")}
         for c in chats
         if c["id"] in order
     ]
-    rows.sort(key=lambda c: (c["unread"] == 0, order[c["id"]]))
+    # Flagged (mention or urgent) first, then other unread chats, each in the user's pick order.
+    rows.sort(key=lambda c: (not c["flag"], c["unread"] == 0, order[c["id"]]))
     unread = sum(c["unread"] for c in rows)
     return {
         "type": "inbox",
