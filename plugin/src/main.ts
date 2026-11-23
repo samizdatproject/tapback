@@ -10,7 +10,6 @@ import {
   type ServerMsg,
 } from './net'
 import { Glasses } from './screens'
-import { MENU_REFRESH } from './screens/inbox'
 import { ScreenManager } from './screens/manager'
 import { createStore } from './state'
 import { KEY_BACKEND, KEY_TOKEN, load, save, useBridgeStorage } from './storage'
@@ -19,10 +18,15 @@ const store = createStore({ token: null, base: DEFAULT_BACKEND, link: 'offline',
 let link: Link | null = null
 let glasses: Glasses | null = null
 
-// One handler per server message type; day 2+ adds `card`, `sent`, … here.
+// One handler per server message type.
 const onServer: { [K in ServerMsg['type']]: (msg: Extract<ServerMsg, { type: K }>) => void } = {
   inbox: msg => store.set({ inbox: { chats: msg.chats, totals: msg.totals } }),
-  error: msg => store.set({ notice: msg.human }),
+  card: ({ type: _, ...card }) => glasses?.onCard(card),
+  sent: ({ type: _, ...sent }) => glasses?.onSent(sent),
+  error: msg => {
+    store.set({ notice: msg.human })
+    glasses?.onError(msg.human)
+  },
 }
 
 function startLink(): void {
@@ -59,27 +63,8 @@ async function authed<T>(call: (base: string, token: string) => Promise<T>): Pro
 }
 
 function onInput(input: Input): void {
-  switch (input.kind) {
-    case 'DOUBLE':
-      glasses?.exit() // Intro and Inbox are both root pages
-      break
-    case 'LIST_SELECT': {
-      const chat = glasses?.chatAt(input.index)
-      console.log('[tapback] chat selected (opens a card from day 2)', input.index, chat?.id)
-      break
-    }
-    case 'MENU':
-      if (input.itemId === MENU_REFRESH) {
-        glasses?.refresh(store.get())
-        link?.send({ type: 'open_inbox' })
-      }
-      break
-    case 'EXIT':
-      link?.stop()
-      break
-    default:
-      break // taps, swipes, long press, foreground changes, audio: nothing on day 1
-  }
+  if (input.kind === 'EXIT') link?.stop()
+  if (input.kind !== 'AUDIO') glasses?.input(input)
 }
 
 mountCompanion(document.querySelector<HTMLElement>('#app')!, store, {
@@ -96,7 +81,7 @@ mountCompanion(document.querySelector<HTMLElement>('#app')!, store, {
   loadChats: async () => (await authed(api.chats)).chats,
   async savePicked(chatIds) {
     await authed((base, token) => api.putPicked(base, token, chatIds))
-    glasses?.refresh(store.get())
+    glasses?.refresh()
     link?.send({ type: 'open_inbox' })
   },
 })
@@ -107,7 +92,10 @@ const [token, base] = await Promise.all([load(KEY_TOKEN), load(KEY_BACKEND)])
 store.set({ token, base: base ?? DEFAULT_BACKEND })
 
 if (bridge) {
-  glasses = new Glasses(new ScreenManager(bridge, notice => store.set({ notice })))
+  glasses = new Glasses(
+    new ScreenManager(bridge, notice => store.set({ notice })),
+    msg => link?.send(msg) ?? false,
+  )
   const g = glasses
   g.render(store.get())
   store.subscribe(s => g.render(s))

@@ -19,19 +19,70 @@ export interface Inbox {
   totals: Totals
 }
 
-/** Server → client. Day 2+ adds members here and a case in parseServerMsg. */
-export type ServerMsg = ({ type: 'inbox' } & Inbox) | { type: 'error'; code: string; human: string }
+export interface CardMsg {
+  id: number
+  sender: string
+  time: string
+  text: string
+  mine: boolean
+}
+export interface Card {
+  chat: { id: string; title: string; kind: ChatKind }
+  /** Oldest → newest, at most 3. */
+  msgs: CardMsg[]
+  replyTo: { id: number; sender: string; text: string } | null
+  suggestions: string[]
+  /** Unread count before the card was shown. */
+  newCount: number
+  /** Unread messages not shown (now read by Telegram's high-water mark). */
+  earlier: number
+}
+export type SentMsg = { clientMsgId: string } & ({ ok: true; at: string } | { ok: false; human: string })
+
+/** Server → client. New members also need a case in parseServerMsg. */
+export type ServerMsg =
+  | ({ type: 'inbox' } & Inbox)
+  | ({ type: 'card' } & Card)
+  | ({ type: 'sent' } & SentMsg)
+  | { type: 'error'; code: string; human: string }
 /** Client → server. */
-export type ClientMsg = { type: 'hello'; token: string } | { type: 'open_inbox' }
+export type ClientMsg =
+  | { type: 'hello'; token: string }
+  | { type: 'open_inbox' }
+  | { type: 'open_chat'; chatId: string }
+  | { type: 'send'; chatId: string; replyTo: number | null; text?: string; reaction?: string; clientMsgId: string }
+  | { type: 'mute'; chatId: string; minutes: number }
+  | { type: 'snooze'; chatId: string; minutes: number }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
+const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : v == null ? fallback : String(v))
+const rec = (v: unknown): Record<string, unknown> | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+
 function parseChat(raw: unknown): InboxChat | null {
-  if (typeof raw !== 'object' || raw === null) return null
-  const c = raw as Record<string, unknown>
-  if (c.id === undefined || c.id === null) return null
+  const c = rec(raw)
+  if (!c || c.id === undefined || c.id === null) return null
   const kind = c.kind === 'group' || c.kind === 'channel' ? c.kind : 'user'
-  return { id: String(c.id), title: String(c.title ?? ''), kind, unread: num(c.unread) }
+  return { id: String(c.id), title: str(c.title), kind, unread: num(c.unread) }
+}
+
+function parseCard(msg: Record<string, unknown>): Card | null {
+  const chat = parseChat(msg.chat)
+  if (!chat) return null
+  const msgs = (Array.isArray(msg.msgs) ? msg.msgs : []).flatMap((raw): CardMsg[] => {
+    const m = rec(raw)
+    return m ? [{ id: num(m.id), sender: str(m.sender), time: str(m.time), text: str(m.text), mine: m.mine === true }] : []
+  })
+  const r = rec(msg.replyTo)
+  return {
+    chat: { id: chat.id, title: chat.title, kind: chat.kind },
+    msgs,
+    replyTo: r ? { id: num(r.id), sender: str(r.sender), text: str(r.text) } : null,
+    suggestions: Array.isArray(msg.suggestions) ? msg.suggestions.map(s => str(s)).filter(Boolean) : [],
+    newCount: num(msg.newCount),
+    earlier: num(msg.earlier),
+  }
 }
 
 /** Pure: a WebSocket text frame in, a typed message (or null to ignore) out. */
@@ -53,8 +104,19 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
       const t = (msg.totals ?? {}) as Record<string, unknown>
       return { type: 'inbox', chats, totals: { unread: num(t.unread), chats: num(t.chats) } }
     }
+    case 'card': {
+      const card = parseCard(msg)
+      return card && { type: 'card', ...card }
+    }
+    case 'sent': {
+      const clientMsgId = str(msg.clientMsgId)
+      if (!clientMsgId) return null
+      return msg.ok === true
+        ? { type: 'sent', clientMsgId, ok: true, at: str(msg.at) }
+        : { type: 'sent', clientMsgId, ok: false, human: str(msg.human, 'Not sent') }
+    }
     case 'error':
-      return { type: 'error', code: String(msg.code ?? ''), human: String(msg.human ?? 'Server error') }
+      return { type: 'error', code: str(msg.code), human: str(msg.human, 'Server error') }
     default:
       return null
   }

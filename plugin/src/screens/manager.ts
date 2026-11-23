@@ -30,6 +30,11 @@ export interface ListBox {
   items: string[]
 }
 
+// Shared page geometry (576×288): one-line header, body, one-line footer.
+export const HEADER = { x: 0, y: 0, w: 576, h: 40 }
+export const BODY = { x: 0, y: 40, w: 576, h: 208 }
+export const FOOTER = { x: 0, y: 248, w: 576, h: 40 }
+
 /** A whole glasses page. Exactly one container captures input: the list if any, else a text box. */
 export interface Page {
   id: string

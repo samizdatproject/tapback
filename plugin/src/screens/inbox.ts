@@ -1,12 +1,8 @@
 import type { State } from '../state'
 import { CONNECTING_TEXT, EMPTY_TEXT, footerText, headerText } from './format'
-import type { Page } from './manager'
+import { BODY, FOOTER, HEADER, type Page } from './manager'
 
 export const MENU_REFRESH = 1
-
-const HEADER = { x: 0, y: 0, w: 576, h: 40 }
-const BODY = { x: 0, y: 40, w: 576, h: 208 }
-const FOOTER = { x: 0, y: 248, w: 576, h: 40 }
 
 /**
  * Root page once paired: live header, the picked chats (or a message), and a

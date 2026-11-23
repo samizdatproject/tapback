@@ -57,7 +57,12 @@ src/
     format.ts        pure text formatting and the inbox rebuild rule
     intro.ts         Intro / unpaired page
     inbox.ts         Inbox page (header, chat list, footer, "Refresh" menu)
-    index.ts         maps state to pages
+    card.ts          Card page; fits messages into the lines that are on screen
+    replies.ts       Quick replies page
+    sending.ts       Sending page and the undo-window state machine
+    nav.ts           next / previous chat with unread
+    text.ts          width model for the proportional glasses font
+    index.ts         the glasses state machine: inputs and server replies → pages
   companion/         phone screen (plain DOM)
 ```
 
@@ -72,5 +77,14 @@ src/
 - The list is never redrawn while you are looking at it, because a redraw would
   move the highlight. New counts update the header. The footer then says the list
   has changed, and **Refresh** in the glasses menu redraws it. Saving a new pick
-  on the phone also redraws it.
-- Picking a chat in the list does nothing yet.
+  on the phone, or coming back from a card, also redraws it.
+- **Card**: tap a chat to open its newest messages (opening marks the chat read
+  in Telegram). The body always fits the screen so swipes reach the app. Swipe ▼/▲
+  goes to the next or previous chat with unread, tap opens Quick replies, and
+  double-tap goes back to the Inbox. The glasses menu offers Mute chat 1h and
+  Snooze 30 min.
+- **Quick replies**: suggestions from the backend. Tap one to send it, or
+  double-tap to go back to the card. Dictation is not built yet.
+- **Sending**: 2 s undo window (double-tap, or opening the glasses menu, cancels).
+  Then `Sent ●` and the next chat with unread. A failure shows the reason with
+  `tap retry`; nothing is resent without a tap.
