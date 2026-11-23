@@ -1,5 +1,7 @@
 # TapBack
 
+[![test](https://github.com/samizdatproject/tapback/actions/workflows/test.yml/badge.svg)](https://github.com/samizdatproject/tapback/actions/workflows/test.yml)
+
 **Telegram triage for Even G2 smart glasses. An unofficial Telegram client that uses the Telegram API.**
 
 TapBack shows only the Telegram chats you pick, one card at a time, on the G2 display. You answer with two taps from rule-based reply suggestions, or hold to dictate a reply. A 30-second digest shows the top posts of the channels you follow.
