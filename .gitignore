@@ -1,0 +1,28 @@
+# secrets and sessions never go in the repo
+*.env
+.env*
+!.env.example
+*.session
+*.session-journal
+session.enc
+session.key
+secrets/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+*.ehpk
+
+# data
+*.sqlite
+*.sqlite3
+*.db
+*.wav
+
+.DS_Store

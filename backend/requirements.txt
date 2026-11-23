@@ -1,0 +1,6 @@
+telethon==1.46.0
+cryptg
+cryptography
+fastapi
+uvicorn[standard]
+pytest
