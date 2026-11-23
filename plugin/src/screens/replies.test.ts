@@ -28,7 +28,7 @@ describe('buildReplies', () => {
 })
 
 describe('repliesHeader', () => {
-  const base: Card = { chat: { id: '2', title: 'Alice', kind: 'user' }, msgs: [], replyTo: null, suggestions: [], newCount: 1, earlier: 0 }
+  const base: Card = { chat: { id: '2', title: 'Alice', kind: 'user' }, msgs: [], replyTo: null, suggestions: [], newCount: 1, earlier: 0, readMaxId: null }
 
   it('quotes the message being answered, cut to one line', () => {
     const h = repliesHeader({ ...base, replyTo: { id: 5, sender: 'Dana', text: 'Can you join the investor call at 3? Need you for the token-unlock slide.' } })

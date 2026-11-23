@@ -27,10 +27,16 @@ const onServer: { [K in ServerMsg['type']]: (msg: Extract<ServerMsg, { type: K }
   stt: ({ type: _, ...stt }) => glasses?.onStt(stt),
   digest: msg => glasses?.onDigest(msg.channels),
   error: ({ type: _, ...err }) => {
+    if (err.code === 'unpaired') {
+      void unpair(SIGNED_OUT)
+      return
+    }
     store.set({ notice: err.human })
     glasses?.onError(err)
   },
 }
+
+const SIGNED_OUT = 'The server signed this device out. Pair again.'
 
 function startLink(): void {
   link?.stop()
@@ -40,6 +46,7 @@ function startLink(): void {
   link = new Link(wsUrl(base), token, {
     message: msg => (onServer[msg.type] as (m: ServerMsg) => void)(msg),
     status: s => store.set({ link: s }),
+    unpaired: () => void unpair(SIGNED_OUT),
   })
   link.start()
 }
@@ -82,6 +89,16 @@ mountCompanion(document.querySelector<HTMLElement>('#app')!, store, {
   },
   unpair: () => unpair('Unpaired. This device no longer has a token.'),
   loadChats: async () => (await authed(api.chats)).chats,
+  async logout() {
+    try {
+      await authed(api.logout)
+      await unpair('Logged out. The server has stopped; run tapback login to use it again.')
+    } catch (err) {
+      // 502: Telegram's logout failed, but the server still wiped its session and devices.
+      if (err instanceof HttpError && err.status === 502) await unpair(err.message)
+      else throw err
+    }
+  },
   async savePicked(chatIds) {
     await authed((base, token) => api.putPicked(base, token, chatIds))
     glasses?.refresh()

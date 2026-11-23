@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { backoffDelay, normaliseBase, parseServerMsg, wsUrl } from './net'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Link, backoffDelay, normaliseBase, parseServerMsg, wsUrl } from './net'
 
 describe('backoffDelay', () => {
   it('doubles from 1 s and caps at 30 s', () => {
@@ -54,5 +54,63 @@ describe('parseServerMsg', () => {
     expect(parseServerMsg('{"type":"later"}')).toBeNull()
     expect(parseServerMsg('nope')).toBeNull()
     expect(parseServerMsg(new ArrayBuffer(4))).toBeNull()
+  })
+})
+
+describe('parse day-5 fields', () => {
+  it('reads the flag, readMaxId and stt id', () => {
+    const inbox = parseServerMsg('{"type":"inbox","chats":[{"id":1,"title":"A","kind":"group","unread":2,"flag":"!"},{"id":2,"title":"B","kind":"user","unread":0,"flag":""}],"totals":{}}')
+    expect(inbox?.type === 'inbox' && inbox.chats.map(c => c.flag)).toEqual(['!', undefined])
+    const card = parseServerMsg('{"type":"card","chat":{"id":1,"title":"A","kind":"user"},"msgs":[],"readMaxId":42}')
+    expect(card?.type === 'card' && card.readMaxId).toBe(42)
+    expect(parseServerMsg('{"type":"stt","id":"d1","text":" hi ","human":""}')).toEqual({ type: 'stt', id: 'd1', text: 'hi', human: '' })
+  })
+})
+
+describe('Link and a revoked device', () => {
+  class FakeSocket {
+    static OPEN = 1
+    static last: FakeSocket
+    readyState = 0
+    onopen: (() => void) | null = null
+    onmessage: ((ev: { data: unknown }) => void) | null = null
+    onclose: ((ev: { code: number }) => void) | null = null
+    sent: unknown[] = []
+    constructor(readonly url: string) {
+      FakeSocket.last = this
+    }
+    send(d: unknown) {
+      this.sent.push(d)
+    }
+    close() {}
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('close code 4401 stops retrying and reports unpaired', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const events: string[] = []
+    const link = new Link('ws://x/ws', 't', { message: () => {}, status: s => events.push(s), unpaired: () => events.push('unpaired') })
+    link.start()
+    const first = FakeSocket.last
+    first.onclose?.({ code: 4401 })
+    vi.advanceTimersByTime(60_000)
+    expect(events).toEqual(['connecting', 'unpaired'])
+    expect(FakeSocket.last).toBe(first) // no reconnect
+  })
+
+  it('other closes keep retrying', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const link = new Link('ws://x/ws', 't', { message: () => {}, status: () => {}, unpaired: () => {} })
+    link.start()
+    const first = FakeSocket.last
+    first.onclose?.({ code: 1006 })
+    vi.advanceTimersByTime(1000)
+    expect(FakeSocket.last).not.toBe(first)
+    link.stop()
   })
 })

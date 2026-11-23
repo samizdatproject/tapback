@@ -80,9 +80,12 @@ src/
   move the highlight. New counts update the header. The footer then says the list
   has changed, and **Refresh** in the glasses menu redraws it. Saving a new pick
   on the phone, or coming back from a card, also redraws it.
-- **Card**: tap a chat to open its newest messages (opening marks the chat read
-  in Telegram). The body always fits the screen so swipes reach the app. Swipe ▼/▲
-  goes to the next or previous chat with unread, tap opens Quick replies, and
+- **Inbox rows** for chats that mention you or match an urgent word start with
+  `!` (the server lists them first). A channel row opens the Digest at that
+  channel.
+- **Card**: tap a chat to open its newest messages. The chat is marked read in
+  Telegram only once the card is actually on the glasses. The body always fits the screen so swipes reach the app. Swipe ▼/▲
+  goes to the next or previous chat with unread (channels are skipped), tap opens Quick replies, and
   double-tap goes back to the Inbox. The glasses menu offers Mute chat 1h and
   Snooze 30 min.
 - **Quick replies**: suggestions from the backend. Tap one to send it, or
@@ -100,4 +103,12 @@ src/
   text only, and "Sponsor info" in the glasses menu shows who is behind it.
 - **Sending**: 2 s undo window (double-tap, or opening the glasses menu, cancels).
   Then `Sent ●` and the next chat with unread. A failure shows the reason with
-  `tap retry`; nothing is resent without a tap.
+  `tap retry`; nothing is resent without a tap, and a retry reuses the message id
+  so the server never sends it twice.
+
+## Phone screen
+
+Pairing, the chat picker, **Unpair** (forget this device's token), **Log out &
+wipe** (asks for a second tap within 5 s, then signs the server out of Telegram
+and deletes its session), and a short privacy summary. If the server revokes the
+device, the plugin returns to pairing.

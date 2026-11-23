@@ -12,6 +12,7 @@ function setup(micOk = true, sendOk = true) {
     send: m => (sent.push(m.type), sendOk),
     sendAudio: pcm => (audio.push(pcm), true),
     onChange: p => phases.push(p),
+    newId: () => 'd1',
   })
   const micIsOn = () => mic.filter(Boolean).length > mic.filter(x => !x).length
   return { d, sent, audio, mic, phases, micIsOn, last: () => phases[phases.length - 1] }
@@ -42,13 +43,44 @@ describe('Dictation', () => {
     const t = setup()
     await t.d.start()
     t.d.stop()
-    t.d.onStt({ text: 'Running late', human: '' })
+    t.d.onStt({ id: 'd1', text: 'Running late', human: '' })
     expect(t.last()).toEqual({ phase: 'preview', text: 'Running late' })
     const u = setup()
     await u.d.start()
     u.d.stop()
-    u.d.onStt({ text: '', human: 'Too short. Hold while you speak.' })
+    u.d.onStt({ id: 'd1', text: '', human: 'Too short. Hold while you speak.' })
     expect(u.last()).toEqual({ phase: 'empty', human: 'Too short. Hold while you speak.' })
+  })
+
+  it('ignores a transcript from an earlier dictation', async () => {
+    let n = 0
+    const phases: DictPhase[] = []
+    const begins: string[] = []
+    const d = new Dictation({
+      mic: async () => true,
+      send: m => (m.type === 'audio_begin' && begins.push(m.id), true),
+      sendAudio: () => true,
+      onChange: p => phases.push(p),
+      newId: () => `d${++n}`,
+    })
+    await d.start()
+    d.stop()
+    await d.start() // the user retried before the first result came back
+    d.stop()
+    expect(begins).toEqual(['d1', 'd2'])
+    d.onStt({ id: 'd1', text: 'old words', human: '' })
+    expect(d.phase).toEqual({ phase: 'transcribing' })
+    d.onStt({ id: 'd2', text: 'new words', human: '' })
+    expect(d.phase).toEqual({ phase: 'preview', text: 'new words' })
+  })
+
+  it('dispose is silent: it schedules no page change', async () => {
+    const t = setup()
+    await t.d.start()
+    const before = t.phases.length
+    t.d.dispose()
+    expect(t.phases.length).toBe(before)
+    expect(t.micIsOn()).toBe(false)
   })
 
   it('cancel (double-tap or menu) turns the mic off and sends audio_cancel', async () => {

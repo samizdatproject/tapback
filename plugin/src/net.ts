@@ -6,6 +6,8 @@ export interface InboxChat {
   title: string
   kind: ChatKind
   unread: number
+  /** "!" for a mention of me or an urgent keyword (the server sorts these first). */
+  flag?: '!' | ''
 }
 export interface Chat extends InboxChat {
   picked: boolean
@@ -34,12 +36,16 @@ export interface Card {
   suggestions: string[]
   /** Unread count before the card was shown. */
   newCount: number
-  /** Unread messages not shown (now read by Telegram's high-water mark). */
+  /** Unread messages not shown (read by Telegram's high-water mark once this card is shown). */
   earlier: number
+  /** Send back in card_shown once the card is on the glasses; null when there is nothing to mark read. */
+  readMaxId: number | null
 }
 export type SentMsg = { clientMsgId: string } & ({ ok: true; at: string } | { ok: false; human: string })
 /** Speech-to-text result; empty `text` comes with a `human` reason. */
 export interface SttMsg {
+  /** Echo of the audio_begin id, so a late result can't land in a newer dictation. */
+  id: string
   text: string
   human: string
 }
@@ -93,11 +99,12 @@ export type ClientMsg =
   | { type: 'send'; chatId: string; replyTo: number | null; text?: string; reaction?: string; clientMsgId: string }
   | { type: 'mute'; chatId: string; minutes: number }
   | { type: 'snooze'; chatId: string; minutes: number }
-  | { type: 'audio_begin' }
+  | { type: 'audio_begin'; id: string }
   | { type: 'audio_end' }
   | { type: 'audio_cancel' }
   | { type: 'digest_open' }
   | { type: 'digest_done'; channelId: string; maxId: number }
+  | { type: 'card_shown'; chatId: string; maxId: number }
   | { type: 'sponsored_viewed'; randomId: string }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -110,7 +117,9 @@ function parseChat(raw: unknown): InboxChat | null {
   const c = rec(raw)
   if (!c || c.id === undefined || c.id === null) return null
   const kind = c.kind === 'group' || c.kind === 'channel' ? c.kind : 'user'
-  return { id: String(c.id), title: str(c.title), kind, unread: num(c.unread) }
+  const chat: InboxChat = { id: String(c.id), title: str(c.title), kind, unread: num(c.unread) }
+  if (c.flag === '!') chat.flag = '!'
+  return chat
 }
 
 function parseCard(msg: Record<string, unknown>): Card | null {
@@ -128,6 +137,7 @@ function parseCard(msg: Record<string, unknown>): Card | null {
     suggestions: Array.isArray(msg.suggestions) ? msg.suggestions.map(s => str(s)).filter(Boolean) : [],
     newCount: num(msg.newCount),
     earlier: num(msg.earlier),
+    readMaxId: typeof msg.readMaxId === 'number' && Number.isInteger(msg.readMaxId) ? msg.readMaxId : null,
   }
 }
 
@@ -193,7 +203,7 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
         : { type: 'sent', clientMsgId, ok: false, human: str(msg.human, 'Not sent') }
     }
     case 'stt':
-      return { type: 'stt', text: str(msg.text).trim(), human: str(msg.human, "Didn't catch that") }
+      return { type: 'stt', id: str(msg.id), text: str(msg.text).trim(), human: str(msg.human, "Didn't catch that") }
     case 'digest':
       return { type: 'digest', channels: (Array.isArray(msg.channels) ? msg.channels : []).flatMap(parseChannel) }
     case 'error': {
@@ -257,7 +267,14 @@ async function request<T>(
   } finally {
     clearTimeout(timer)
   }
-  if (!res.ok) throw new HttpError(res.status, `Server said ${res.status} ${res.statusText}`.trim())
+  if (!res.ok) {
+    // FastAPI puts the reason in `detail`; show it when it is plain text.
+    const detail = await res.json().then(
+      (b: unknown) => (typeof rec(b)?.detail === 'string' ? (rec(b)?.detail as string) : ''),
+      () => '',
+    )
+    throw new HttpError(res.status, detail || `Server said ${res.status} ${res.statusText}`.trim())
+  }
   return (await res.json()) as T
 }
 
@@ -268,6 +285,8 @@ export const api = {
   chats: (base: string, token: string) => request<{ chats: Chat[] }>(base, '/chats', { token }),
   putPicked: (base: string, token: string, chatIds: string[]) =>
     request<{ ok: boolean }>(base, '/picked', { method: 'PUT', token, body: { chatIds } }),
+  /** Signs the server out of Telegram and wipes its session. */
+  logout: (base: string, token: string) => request<{ ok: boolean }>(base, '/logout', { method: 'POST', token }),
 }
 
 // ---- WebSocket ----
@@ -277,7 +296,11 @@ export type LinkStatus = 'connecting' | 'online' | 'offline'
 export interface LinkHandlers {
   message(msg: ServerMsg): void
   status(status: LinkStatus): void
+  /** The server revoked this device (close code 4401): stop and pair again. */
+  unpaired(): void
 }
+
+const CLOSE_UNPAIRED = 4401
 
 /**
  * One live connection to the backend. Every (re)connect sends `hello`, and the
@@ -350,7 +373,14 @@ export class Link {
       }
       this.on.message(msg)
     }
-    ws.onclose = () => this.retry(gen)
+    ws.onclose = ev => {
+      if (gen === this.gen && ev.code === CLOSE_UNPAIRED) {
+        this.stop()
+        this.on.unpaired()
+        return
+      }
+      this.retry(gen)
+    }
   }
 
   private retry(gen: number): void {

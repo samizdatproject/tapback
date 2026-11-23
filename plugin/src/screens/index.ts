@@ -73,6 +73,8 @@ export class Glasses {
   private order: string[] = [] // inbox order captured when the user left the Inbox
   private pending: Pending | null = null
 
+  private digestFocus = '' // channel whose page the next digest opens at
+  private shownCards = new WeakSet<Card>() // cards already reported with card_shown
   private viewedAds = new Set<string>() // sponsored randomIds already reported, across digest loads
   private lastDoubleAt = -Infinity
   private delay: ReturnType<typeof setTimeout> | null = null
@@ -153,10 +155,17 @@ export class Glasses {
         if (input.kind === 'DOUBLE') this.screens.exit()
         break
       case 'inbox':
-        if (input.kind === 'DOUBLE') this.screens.exit() // root page
-        else if (input.kind === 'LIST_SELECT') {
+        if (input.kind === 'DOUBLE') {
+          // While a chat or the digest is opening, double-tap cancels that instead of exiting.
+          if (this.pending) {
+            this.clearPending()
+            this.status(null)
+          } else this.screens.exit() // root page
+        } else if (input.kind === 'LIST_SELECT') {
           const chat = this.shownChats[input.index]
-          if (chat) this.open(chat)
+          // Channels can't take replies and carry sponsored messages: they live in the digest.
+          if (chat?.kind === 'channel') this.openDigest(chat.id)
+          else if (chat) this.open(chat)
           else if (this.shownDigest && input.index === this.shownChats.length) this.openDigest()
         } else if (input.kind === 'MENU' && input.itemId === MENU_REFRESH) {
           this.refresh()
@@ -241,7 +250,8 @@ export class Glasses {
       this.flash('No channels picked for the digest')
       return
     }
-    this.showDigestPage({ name: 'digest', pages, index: 0 }, 0)
+    const at = pages.findIndex(p => p.kind === 'channel' && p.channel.id === this.digestFocus)
+    this.showDigestPage({ name: 'digest', pages, index: 0 }, Math.max(0, at))
   }
 
   onCard(card: Card): void {
@@ -278,8 +288,10 @@ export class Glasses {
     this.request({ type: 'open_chat', chatId: chat.id }, chat.id, `Opening ${title}…`, `Couldn't open ${title}`, OPEN_TIMEOUT_MS)
   }
 
-  private openDigest(): void {
+  /** Opens the digest, at `channelId`'s page if given. */
+  private openDigest(channelId = ''): void {
     this.leave()
+    this.digestFocus = channelId
     this.request({ type: 'digest_open' }, '', 'Loading digest…', "Couldn't load the digest", DIGEST_TIMEOUT_MS)
   }
 
@@ -317,8 +329,14 @@ export class Glasses {
 
   private showCard(card: Card): void {
     this.leave()
-    this.view = { name: 'card', card }
-    void this.screens.show(cardPage(card, position(this.order, this.chats, card.chat.id)))
+    const view: View = { name: 'card', card }
+    this.view = view
+    void this.screens.show(cardPage(card, position(this.order, this.chats, card.chat.id))).then(drawn => {
+      // The server marks the chat read only now that the card was really seen, once.
+      if (!drawn || this.view !== view || card.readMaxId === null || this.shownCards.has(card)) return
+      this.shownCards.add(card)
+      this.send({ type: 'card_shown', chatId: card.chat.id, maxId: card.readMaxId })
+    })
   }
 
   private startDictation(card: Card, from: 'card' | 'replies', route: 'hold' | 'tap'): void {

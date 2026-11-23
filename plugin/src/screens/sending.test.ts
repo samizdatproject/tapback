@@ -60,7 +60,7 @@ describe('SendFlow', () => {
     expect(last()).toEqual({ phase: 'sent', at: '14:02' })
   })
 
-  it('shows the server failure and retries with a fresh id after a new window', () => {
+  it('shows the server failure and retries with the same id after a new window', () => {
     const { flow, sent, last } = setup()
     flow.start()
     vi.advanceTimersByTime(2000)
@@ -69,9 +69,30 @@ describe('SendFlow', () => {
     flow.retry()
     expect(last()).toEqual({ phase: 'counting', leftMs: 2000 })
     vi.advanceTimersByTime(2000)
-    expect(sent).toEqual(['id1', 'id2'])
-    flow.ack({ clientMsgId: 'id1', ok: true, at: 'late' })
-    expect(last()).toEqual({ phase: 'sending' })
+    expect(sent).toEqual(['id1', 'id1'])
+  })
+
+  it('a retry after a timeout reuses the id, so a slow first send is not sent twice', () => {
+    const { flow, sent, last } = setup()
+    flow.start()
+    vi.advanceTimersByTime(2000 + 8000)
+    expect(last().phase).toBe('failed')
+    flow.retry()
+    vi.advanceTimersByTime(2000)
+    expect(sent).toEqual(['id1', 'id1']) // the server answers the duplicate from its cache
+    flow.ack({ clientMsgId: 'id1', ok: true, at: '14:03' })
+    expect(last()).toEqual({ phase: 'sent', at: '14:03' })
+  })
+
+  it('a new flow (a new choice) gets a new id', () => {
+    let n = 0
+    const ids: string[] = []
+    for (let i = 0; i < 2; i++) {
+      const f = new SendFlow({ send: id => (ids.push(id), true), onChange: () => {}, newId: () => `n${++n}` })
+      f.start()
+      vi.advanceTimersByTime(2000)
+    }
+    expect(ids).toEqual(['n1', 'n2'])
   })
 
   it('times out after 8 s without an answer and does not resend', () => {

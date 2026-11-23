@@ -155,6 +155,23 @@ button.danger {
   align-self: flex-start;
 }
 
+.row.start {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 0;
+}
+
+.privacy {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.privacy li + li {
+  margin-top: 6px;
+}
+
 .row {
   display: flex;
   gap: 8px;

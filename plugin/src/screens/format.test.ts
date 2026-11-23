@@ -43,6 +43,14 @@ describe('inbox rows', () => {
     expect(inboxRow(chat('   '))).toBe('Untitled chat')
   })
 
+  it('prefixes flagged chats with "!" and still fits the limits', () => {
+    expect(inboxRow({ ...chat('Acme Work', 2), flag: '!' })).toBe('! Acme Work · 2')
+    const row = inboxRow({ ...chat('Рабочая группа по проекту и всё такое прочее ещё', 12), flag: '!' })
+    expect(row.startsWith('! ')).toBe(true)
+    expect(bytes(row)).toBeLessThanOrEqual(ROW_MAX_BYTES)
+    expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
+  })
+
   it('caps big counts and the number of rows', () => {
     expect(inboxRow(chat('Busy', 12345))).toBe('Busy · 999+')
     expect(inboxRows(Array.from({ length: 30 }, (_, i) => chat(`c${i}`)))).toHaveLength(LIST_MAX_ITEMS)

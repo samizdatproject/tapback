@@ -22,8 +22,9 @@ export interface SendFlowOptions {
 /**
  * The undo window: count down, then send once, then wait for `sent`. Undo is
  * possible only while counting. Never resends by itself; `retry()` re-runs the
- * window. Every attempt gets a fresh clientMsgId, so a late answer to an
- * earlier attempt is ignored.
+ * window with the SAME clientMsgId, so the server can answer a duplicate from
+ * its cache instead of sending the message twice (e.g. after a slow first try).
+ * A new flow, i.e. a new choice by the user, gets a new id.
  */
 export class SendFlow {
   private clientMsgId = ''
@@ -92,7 +93,7 @@ export class SendFlow {
   }
 
   private fire(): void {
-    this.clientMsgId = (this.opts.newId ?? (() => crypto.randomUUID()))()
+    if (!this.clientMsgId) this.clientMsgId = (this.opts.newId ?? (() => crypto.randomUUID()))()
     this.set({ phase: 'sending' })
     if (!this.opts.send(this.clientMsgId)) {
       this.set({ phase: 'failed', human: 'Offline. Not sent.' })

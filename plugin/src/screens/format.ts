@@ -25,10 +25,12 @@ export function fit(text: string, maxChars: number, maxBytes = Infinity): string
 }
 
 export function inboxRow(chat: InboxChat): string {
+  const prefix = chat.flag === '!' ? '! ' : ''
   const suffix = chat.unread > 0 ? ` · ${chat.unread > 999 ? '999+' : chat.unread}` : ''
   const title = chat.title.replace(/\s+/g, ' ').trim() || 'Untitled chat'
-  const room = { chars: ROW_MAX_CHARS - Array.from(suffix).length, bytes: ROW_MAX_BYTES - bytes(suffix) }
-  return fit(title, room.chars, room.bytes) + suffix
+  const extra = prefix + suffix
+  const room = { chars: ROW_MAX_CHARS - Array.from(extra).length, bytes: ROW_MAX_BYTES - bytes(extra) }
+  return prefix + fit(title, room.chars, room.bytes) + suffix
 }
 
 export function inboxRows(chats: InboxChat[]): string[] {

@@ -13,6 +13,7 @@ const card = (over: Partial<Card> = {}): Card => ({
   suggestions: [],
   newCount: 3,
   earlier: 0,
+  readMaxId: null,
   ...over,
 })
 

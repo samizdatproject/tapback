@@ -5,6 +5,8 @@ import './style.css'
 export interface CompanionActions {
   pair(base: string, code: string): Promise<void>
   unpair(): Promise<void>
+  /** Log the server out of Telegram and wipe its session. */
+  logout(): Promise<void>
   loadChats(): Promise<Chat[]>
   savePicked(chatIds: string[]): Promise<void>
 }
@@ -72,6 +74,8 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
   const reloadButton = el('button', { type: 'button' }, 'Reload')
   const saveButton = el('button', { type: 'button', className: 'primary' }, 'Save')
   const unpairButton = el('button', { type: 'button', className: 'danger' }, 'Unpair')
+  const logoutButton = el('button', { type: 'button', className: 'danger' }, 'Log out & wipe')
+  const logoutHint = el('p', { className: 'hint', hidden: true })
   const pickCard = el(
     'section',
     { className: 'card' },
@@ -85,9 +89,27 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
     { className: 'card' },
     el('h2', {}, 'This device'),
     pairedWith,
-    unpairButton,
+    el('div', { className: 'row start' }, unpairButton, logoutButton),
+    logoutHint,
   )
   const pairedView = el('div', { className: 'stack' }, pickCard, deviceCard)
+  const privacy = el(
+    'section',
+    { className: 'card' },
+    el('h2', {}, 'Privacy'),
+    el(
+      'ul',
+      { className: 'privacy' },
+      ...[
+        'TapBack is an unofficial Telegram client. It uses the Telegram API.',
+        'Only chats you pick reach the glasses. Opening a card marks it read.',
+        'Reply suggestions come from fixed rules. No message is sent to any AI service.',
+        "Dictation audio goes only to your own server's speech-to-text.",
+        'Sponsored messages in channels are shown as Telegram requires.',
+        'Your server keeps no message text; the Telegram session is stored encrypted.',
+      ].map(line => el('li', {}, line)),
+    ),
+  )
 
   root.replaceChildren(
     el(
@@ -103,6 +125,7 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
       status,
       pairForm,
       pairedView,
+      privacy,
     ),
   )
 
@@ -184,6 +207,29 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
   )
 
   unpairButton.addEventListener('click', () => void busy(unpairButton, actions.unpair))
+
+  // Destructive: the first tap only arms it for 5 s.
+  let armed: ReturnType<typeof setTimeout> | null = null
+  const disarm = () => {
+    if (armed) clearTimeout(armed)
+    armed = null
+    logoutHint.hidden = true
+    logoutButton.textContent = 'Log out & wipe'
+  }
+  logoutButton.addEventListener('click', () => {
+    if (!armed) {
+      logoutHint.textContent = 'This signs TapBack out of Telegram on the server and deletes the session. Tap again to confirm'
+      logoutHint.hidden = false
+      logoutButton.textContent = 'Tap again to confirm'
+      armed = setTimeout(disarm, 5000)
+      return
+    }
+    disarm()
+    void busy(logoutButton, async () => {
+      say('Logging out…')
+      await actions.logout()
+    })
+  })
 
   let wasPaired: boolean | null = null
   let wasOnline: boolean | null = null

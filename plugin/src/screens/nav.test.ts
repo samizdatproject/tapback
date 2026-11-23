@@ -43,4 +43,10 @@ describe('position', () => {
     expect(position(order, latest, 'acme')).toEqual({ n: 1, m: 3 })
     expect(position(order, latest, 'news')).toEqual({ n: 2, m: 2 }) // read chats drop out
   })
+
+  it('never steps onto a channel (channels are read in the digest)', () => {
+    const latest: InboxChat[] = [c('acme', 0), { id: 'alice', title: 'news', kind: 'channel', unread: 9 }, c('news', 2)]
+    expect(neighbour(order, latest, 'acme', 1)?.id).toBe('news')
+    expect(position(order, latest, 'acme')).toEqual({ n: 1, m: 2 })
+  })
 })

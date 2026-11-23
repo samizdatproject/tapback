@@ -12,7 +12,12 @@ const card = (id: string): Card => ({
   suggestions: ['Yes'],
   newCount: 1,
   earlier: 0,
+  readMaxId: 9,
 })
+const beginId = (sent: ClientMsg[]) => {
+  const begins = sent.filter(m => m.type === 'audio_begin')
+  return (begins[begins.length - 1] as { id: string }).id
+}
 const state = (chats: InboxChat[]): State => ({
   token: 't',
   base: 'http://x',
@@ -188,14 +193,14 @@ describe('Glasses dictation', () => {
     t.g.input({ kind: 'LONG_START' })
     await flush()
     expect(t.micCalls).toEqual([true])
-    expect(t.sent.at(-1)).toEqual({ type: 'audio_begin' })
+    expect(t.sent.at(-1)).toMatchObject({ type: 'audio_begin' })
     t.g.input({ kind: 'AUDIO', pcm: new Uint8Array(4) })
     t.g.input({ kind: 'LONG_END' })
     t.g.input({ kind: 'AUDIO', pcm: new Uint8Array(4) })
     expect(t.audio).toHaveLength(1)
     expect(t.micCalls).toEqual([true, false])
     expect(t.sent.at(-1)).toEqual({ type: 'audio_end' })
-    t.g.onStt({ text: 'On my way', human: '' })
+    t.g.onStt({ id: beginId(t.sent), text: 'On my way', human: '' })
     t.g.input({ kind: 'CLICK' })
     expect(t.page().id).toBe('sending')
     vi.advanceTimersByTime(2000)
@@ -252,20 +257,21 @@ describe('Glasses dictation', () => {
     expect(t.micCalls).toEqual([true])
     t.g.input({ kind: 'CLICK' })
     expect(t.micCalls).toEqual([true, false])
-    t.g.onStt({ text: '', human: "Didn't catch that" })
+    t.g.onStt({ id: beginId(t.sent), text: '', human: "Didn't catch that" })
     expect(t.texts.at(-1)?.[1]).toContain('tap retry')
     t.g.input({ kind: 'DOUBLE' })
     expect(t.page().id).toBe('replies')
   })
 })
 
+const ch = (id: string, over: Partial<DigestChannel> = {}): DigestChannel => ({
+  id, title: id, newCount: 4, recent: false, maxId: 50, sponsored: null,
+  top: [{ id: 1, text: 'post', views: 10, reactions: 1 }],
+  ...over,
+})
+const ad = { randomId: 'r1', label: 'Sponsored', title: 'Ad', text: 'Buy', button: 'Open', sponsorInfo: 'Foo Ltd', additionalInfo: '' }
+
 describe('Glasses digest', () => {
-  const ch = (id: string, over: Partial<DigestChannel> = {}): DigestChannel => ({
-    id, title: id, newCount: 4, recent: false, maxId: 50, sponsored: null,
-    top: [{ id: 1, text: 'post', views: 10, reactions: 1 }],
-    ...over,
-  })
-  const ad = { randomId: 'r1', label: 'Sponsored', title: 'Ad', text: 'Buy', button: 'Open', sponsorInfo: 'Foo Ltd', additionalInfo: '' }
 
   function open(channels: DigestChannel[]) {
     const t = setup([chat('a', 1), { id: 'c1', title: 'News', kind: 'channel', unread: 4 }])
@@ -316,5 +322,85 @@ describe('Glasses digest', () => {
     const t = open([ch('c1')])
     t.g.input({ kind: 'SWIPE_DOWN' })
     expect(t.page().id).toBe('inbox')
+  })
+
+  it('a channel row opens the digest at that channel', () => {
+    const t = setup([chat('a', 1), { id: 'c2', title: 'Tech', kind: 'channel', unread: 0 }])
+    t.g.input({ kind: 'LIST_SELECT', index: 1 })
+    expect(t.sent.at(-1)).toEqual({ type: 'digest_open' })
+    t.g.onDigest([ch('c1', { sponsored: ad }), ch('c2')])
+    expect(t.page().id).toBe('digest')
+    expect(t.page().texts[0].content).toBe('Digest · c2 · 4 new  2/2') // pages: c1, ad, c2
+  })
+})
+
+describe('Glasses card_shown (read only once seen)', () => {
+  it('is sent once, after the card page is drawn', async () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    t.g.onCard(card('a'))
+    expect(t.sent.some(m => m.type === 'card_shown')).toBe(false) // not before the draw resolves
+    await vi.advanceTimersByTimeAsync(0)
+    t.g.input({ kind: 'CLICK' }) // to replies
+    t.g.input({ kind: 'DOUBLE' }) // back to the same card
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sent.filter(m => m.type === 'card_shown')).toEqual([{ type: 'card_shown', chatId: 'a', maxId: 9 }])
+  })
+
+  it('is never sent for a card that was dropped or left before it was drawn', async () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    vi.advanceTimersByTime(8000) // open timed out
+    t.g.onCard(card('a')) // arrives late: ignored
+    t.g.input({ kind: 'LIST_SELECT', index: 1 })
+    t.g.onCard(card('b'))
+    t.g.input({ kind: 'DOUBLE' }) // left before the draw resolved
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sent.some(m => m.type === 'card_shown')).toBe(false)
+  })
+
+  it('is not sent when there is nothing to mark read', async () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    t.g.onCard({ ...card('a'), readMaxId: null })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sent.some(m => m.type === 'card_shown')).toBe(false)
+  })
+})
+
+describe('Glasses leaving mid-dictation', () => {
+  it('unpairing while listening shows the Intro and never redraws the old card', async () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    t.g.onCard(card('a'))
+    t.g.input({ kind: 'LONG_START' })
+    await vi.advanceTimersByTimeAsync(0)
+    t.g.render({ ...state([]), token: null })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(t.pages.map(p => p.id).slice(-2)).toEqual(['dictate', 'intro'])
+    expect(t.micCalls).toEqual([true, false])
+  })
+
+  it('EXIT while listening turns the mic off and schedules nothing', async () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    t.g.onCard(card('a'))
+    t.g.input({ kind: 'LONG_START' })
+    await vi.advanceTimersByTimeAsync(0)
+    const before = t.pages.length
+    t.g.input({ kind: 'EXIT' })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(t.pages.length).toBe(before)
+    expect(t.micCalls).toEqual([true, false])
+  })
+
+  it('double-tap while a chat is opening cancels the open instead of exiting', () => {
+    const t = setup()
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    vi.advanceTimersByTime(400)
+    t.g.input({ kind: 'DOUBLE' })
+    t.g.onCard(card('a')) // late answer: ignored, so never shown and never marked read
+    expect(t.page().id).toBe('inbox')
+    expect(t.texts.at(-1)?.[1]).toContain('TapBack')
   })
 })

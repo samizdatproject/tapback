@@ -10,9 +10,10 @@ export function mergeOrder(order: string[], latest: InboxChat[]): string[] {
   return [...order, ...latest.map(c => c.id).filter(id => !known.has(id))]
 }
 
-/** Chats a swipe can reach: the current one plus every chat that still has unread. */
+/** Chats a swipe can reach: the current one plus every non-channel chat that still has unread. */
 function stops(order: string[], latest: InboxChat[], currentId: string): string[] {
-  const unread = new Set(latest.filter(c => c.unread > 0).map(c => c.id))
+  // Channels are read in the digest, never as cards.
+  const unread = new Set(latest.filter(c => c.unread > 0 && c.kind !== 'channel').map(c => c.id))
   return mergeOrder(order, latest).filter(id => id === currentId || unread.has(id))
 }
 

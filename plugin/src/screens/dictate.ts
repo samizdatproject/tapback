@@ -16,6 +16,7 @@ export interface DictationDeps {
   send(msg: ClientMsg): boolean
   sendAudio(pcm: Uint8Array): boolean
   onChange(phase: DictPhase): void
+  newId?: () => string
   maxMs?: number
   tickMs?: number
   sttTimeoutMs?: number
@@ -31,6 +32,7 @@ export class Dictation {
   private stopWanted = false // a release that came while the mic was still starting
   private timer: ReturnType<typeof setTimeout> | null = null
   private startedAt = 0
+  private id = '' // sent with audio_begin; the matching stt echoes it
   private readonly maxMs: number
   private readonly tickMs: number
   private readonly sttTimeoutMs: number
@@ -62,7 +64,8 @@ export class Dictation {
       return
     }
     this.micOn = true
-    if (!this.deps.send({ type: 'audio_begin' })) {
+    this.id = (this.deps.newId ?? (() => crypto.randomUUID()))()
+    if (!this.deps.send({ type: 'audio_begin', id: this.id })) {
       this.micOff()
       this.set({ phase: 'empty', human: 'Offline. Try again in a moment.' })
       return
@@ -106,7 +109,8 @@ export class Dictation {
   }
 
   onStt(msg: SttMsg): void {
-    if (this.state.phase !== 'transcribing') return
+    // A result for an earlier dictation must not land in this one.
+    if (this.state.phase !== 'transcribing' || msg.id !== this.id) return
     this.clear()
     this.set(msg.text ? { phase: 'preview', text: msg.text } : { phase: 'empty', human: msg.human || "Didn't catch that" })
   }
@@ -120,9 +124,14 @@ export class Dictation {
     this.set({ phase: 'empty', human })
   }
 
-  /** Leaving the page, disconnecting or exiting: never leave the mic on. */
+  /**
+   * Leaving the page, disconnecting or exiting: never leave the mic on.
+   * Silent on purpose: the page is already gone, so no onChange (which could
+   * schedule UI for a page that no longer exists).
+   */
   dispose(): void {
-    if (this.active) this.cancel()
+    if (this.state.phase === 'listening') this.deps.send({ type: 'audio_cancel' })
+    if (this.active) this.state = { phase: 'cancelled' }
     this.clear()
     this.micOff()
   }
