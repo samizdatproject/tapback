@@ -1,0 +1,21 @@
+{
+  "package_id": "io.github.samizdatproject.tapback",
+  "edition": "202601",
+  "name": "TapBack",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Talks only to your own TapBack server: unread counts for the chats you picked, and the replies you send.",
+      "whitelist": ["http://localhost:8787", "ws://localhost:8787"]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Listens only while you hold to talk, to dictate a reply. The audio goes only to your own TapBack server for transcription."
+    }
+  ],
+  "supported_languages": ["en"]
+}
