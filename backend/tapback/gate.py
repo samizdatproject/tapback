@@ -63,15 +63,26 @@ async def _run(cfg: config.Config, group: str, send: bool) -> bool:
         else:
             print("[SKIP] 4. reply (--no-send)")
 
-        res = await client(GetSponsoredMessagesRequest(peer=SPONSORED_TEST_CHANNEL))
-        count = len(res.messages) if isinstance(res, SponsoredMessages) else 0
-        detail = f"@{SPONSORED_TEST_CHANNEL} returned {count} sponsored message(s)"
-        if count:
-            m = res.messages[0]
-            detail += f" (title: {m.title!r}, has random_id: {bool(m.random_id)})"
-        results.append(_step(5, count > 0, detail))
-
+        # Telegram's test channel "will always return a sponsored message", but it sometimes
+        # returns none; then try the public channels the account has joined.
         channels = [d for d in dialogs if isinstance(d.entity, Channel) and d.entity.broadcast]
+        candidates = [SPONSORED_TEST_CHANNEL] + [
+            d.entity.username for d in channels if d.entity.username and d.entity.username != SPONSORED_TEST_CHANNEL
+        ]
+        tried: list[str] = []
+        found = None
+        for name in candidates:
+            res = await client(GetSponsoredMessagesRequest(peer=name))
+            count = len(res.messages) if isinstance(res, SponsoredMessages) else 0
+            tried.append(f"@{name}: {count}")
+            if count:
+                found = (name, res.messages[0])
+                break
+        detail = "sponsored messages per channel: " + ", ".join(tried)
+        if found:
+            detail += f" (title: {found[1].title!r}, has random_id: {bool(found[1].random_id)})"
+        results.append(_step(5, found is not None, detail))
+
         print(f"[INFO] 6. joined broadcast channels ({len(channels)}):")
         for d in channels:
             handle = f"@{d.entity.username}" if d.entity.username else "(private)"
