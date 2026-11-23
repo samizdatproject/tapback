@@ -36,3 +36,8 @@ def test_cross_channel_duplicates_dropped_and_empty_lines_skipped():
 
 def test_no_posts():
     assert top_posts([]) == []
+
+
+def test_short_heading_is_joined_with_the_next_line():
+    assert first_line("Market Overview:\nBTC holds $91k as ETF inflows slow\nmore") == "Market Overview: BTC holds $91k as ETF inflows slow"
+    assert first_line("UK to ban crypto exchanges from market making") == "UK to ban crypto exchanges from market making"

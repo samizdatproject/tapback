@@ -23,16 +23,24 @@ def strip_emoji(text: str) -> str:
     return _EMOJI.sub("", text)
 
 
+HEADING_MIN = 12  # a heading like "Market Overview:" (ends with ':' or is very short) is joined with the next line
+
+
 def first_line(text: str, limit: int = LINE_MAX) -> str:
+    parts: list[str] = []
     for raw in (text or "").splitlines():
         line = " ".join(_EMOJI.sub("", _URL.sub("", raw)).split()).strip(" -•|")
-        if len(line) >= 3:
-            if len(line) <= limit:
-                return line
-            head = line[: limit - 1]
-            space = head.rfind(" ")
-            return (head[:space] if space > limit * 0.6 else head).rstrip(" ,.;:") + "…"
-    return ""
+        if len(line) < 3:
+            continue
+        parts.append(line)
+        if not line.endswith(":") and len(" ".join(parts)) >= HEADING_MIN:
+            break
+    line = " ".join(parts)
+    if len(line) <= limit:
+        return line
+    head = line[: limit - 1]
+    space = head.rfind(" ")
+    return (head[:space] if space > limit * 0.6 else head).rstrip(" ,.;:") + "…"
 
 
 def raw_score(p: dict) -> float:
