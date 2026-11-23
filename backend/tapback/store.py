@@ -25,6 +25,9 @@ class Store:
     def __init__(self, path: Path | str, clock=time.time):
         self._clock = clock
         self._lock = threading.Lock()
+        path = Path(path)
+        if not path.exists():
+            path.touch(mode=0o600)
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._db.executescript(
             """

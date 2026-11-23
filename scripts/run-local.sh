@@ -2,12 +2,12 @@
 # Starts TapBack locally: whisper.cpp server (optional), backend and plugin dev server.
 # Ctrl-C stops everything this script started.
 #
-#   TAPBACK_ENV=path/to/tapback.env  env file with TG_API_ID / TG_API_HASH (default: ./tapback.env)
+#   TAPBACK_ENV=path/to/tapback.env  env file with TG_API_ID / TG_API_HASH (default: ~/.config/tapback/tapback.env)
 #   WHISPER_SERVER=path/to/whisper-server   WHISPER_MODEL=path/to/ggml-base.en.bin   (both optional)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
-export TAPBACK_ENV="${TAPBACK_ENV:-$ROOT/tapback.env}"
+export TAPBACK_ENV="${TAPBACK_ENV:-$HOME/.config/tapback/tapback.env}"
 
 if [[ ! -f "$TAPBACK_ENV" ]]; then
   echo "No env file at $TAPBACK_ENV. Create it with TG_API_ID and TG_API_HASH (see README)." >&2

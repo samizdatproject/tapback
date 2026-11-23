@@ -44,12 +44,14 @@ Requirements: Python 3.11+, Node 22.13+, a Telegram api_id/api_hash from [my.tel
 # 1. backend
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cat > ../tapback.env <<'EOF'
+mkdir -p -m 700 ~/.config/tapback        # secrets live outside the repo
+cat > ~/.config/tapback/tapback.env <<'EOF'
 TG_API_ID=123456
 TG_API_HASH=your_api_hash
 EOF
-TAPBACK_ENV=../tapback.env .venv/bin/python -m tapback login   # phone, code, 2FA in your terminal
-TAPBACK_ENV=../tapback.env .venv/bin/python -m tapback serve   # prints a 6-digit pairing code
+export TAPBACK_ENV=~/.config/tapback/tapback.env
+.venv/bin/python -m tapback login   # phone, code, 2FA in your terminal
+.venv/bin/python -m tapback serve   # prints a 6-digit pairing code
 
 # 2. speech-to-text (optional)
 whisper-server -m models/ggml-base.en.bin --host 127.0.0.1 --port 8080
@@ -60,6 +62,13 @@ cd ../plugin && npm install && npm run dev
 ```
 
 Pair on the phone screen with the code the backend printed, pick your chats, and press Save.
+Or start everything at once with `scripts/run-local.sh`.
+
+### On real glasses
+
+In the simulator the plugin reaches the backend at `localhost`. On a phone, `localhost` is the phone, so the backend needs an HTTPS address the phone can reach. **Don't expose it over plain HTTP**: the device token, messages and audio would cross the network unencrypted. Put it behind TLS, for example `tailscale serve 8787` on a tailnet your phone is on, or a reverse proxy such as Caddy on a VPS, and add that `https://` and `wss://` origin to the `network` whitelist in `plugin/app.json`.
+
+The device token is as powerful as the backend itself, so pair only your own phone. **Log out & wipe** on the phone screen ends the Telegram session (`auth.logOut`), deletes the encrypted session and forgets every paired device.
 
 ## What existed before Nov 23
 

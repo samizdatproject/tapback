@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -11,70 +13,97 @@ CHATS = [
     {"id": "42", "title": "Alice", "kind": "user", "unread": 0, "picked": False},
     {"id": "-1002", "title": "News", "kind": "channel", "unread": 5, "picked": False},
 ]
+KINDS = {c["id"]: c["kind"] for c in CHATS}
 
 
 class FakeTG:
     def __init__(self):
-        self.sent, self.muted, self.opened = [], [], []
-        self.fail = False
+        self.calls = []
+        self.fail_send = False
+        self.logout_ok = True
 
     async def chats(self, picked):
         return [dict(c, picked=c["id"] in picked) for c in CHATS]
 
+    async def chat_kind(self, chat_id):
+        return KINDS[chat_id]
+
     async def card(self, chat_id):
-        self.opened.append(chat_id)
-        return {"type": "card", "chat": {"id": chat_id}, "msgs": [], "replyTo": None, "suggestions": [], "newCount": 0, "earlier": 0}
+        self.calls.append(("card", chat_id))
+        return {"type": "card", "chat": {"id": chat_id}, "msgs": [{"id": 7}], "replyTo": None,
+                "suggestions": [], "newCount": 1, "earlier": 0, "readMaxId": 7}
+
+    async def mark_read(self, chat_id, max_id):
+        self.calls.append(("read", chat_id, max_id))
 
     async def send(self, chat_id, reply_to, text, reaction):
-        if self.fail:
+        if self.fail_send:
             raise RuntimeError("boom")
-        self.sent.append((chat_id, reply_to, text, reaction))
+        self.calls.append(("send", chat_id, reply_to, text, reaction))
 
     async def mute(self, chat_id, minutes):
-        self.muted.append((chat_id, minutes))
+        self.calls.append(("mute", chat_id, minutes))
 
     async def digest(self, channel_ids):
         return [{"id": c, "title": "News", "newCount": 5, "top": [], "maxId": 9, "sponsored": None} for c in channel_ids]
 
-    async def mark_read(self, chat_id, max_id):
-        self.muted.append(("read", chat_id, max_id))
+    async def view_sponsored(self, rid):
+        self.calls.append(("view", rid))
+        return True
 
     async def log_out(self):
-        self.muted.append("logout")
+        self.calls.append(("logout",))
+        return self.logout_ok
 
-    async def view_sponsored(self, rid):
-        self.muted.append(("view", rid))
-        return True
+    def sends(self):
+        return [c for c in self.calls if c[0] == "send"]
+
+
+async def fake_stt(pcm):
+    if pcm[:1] == b"x":
+        raise RuntimeError("offline")
+    return f"heard {len(pcm)} bytes"
 
 
 @pytest.fixture
 def env(tmp_path):
     store = Store(tmp_path / "db.sqlite")
     tg = FakeTG()
-    async def fake_stt(pcm):
-        if pcm[:1] == b"x":
-            raise RuntimeError("offline")
-        return f"heard {len(pcm)} bytes"
-
     client = TestClient(create_app(tg, store, fake_stt))
     client.tg = tg
     token = client.post("/pair", json={"code": store.new_pairing_code()}).json()["token"]
     return client, store, {"Authorization": f"Bearer {token}"}, token
 
 
-def test_build_inbox_picked_only_unread_first():
+def _ws(client, token):
+    ws = client.websocket_connect("/ws").__enter__()
+    ws.send_json({"type": "hello", "token": token})
+    assert ws.receive_json()["type"] == "inbox"
+    return ws
+
+
+def _until(ws, kind):
+    while True:
+        m = ws.receive_json()
+        if m["type"] == kind:
+            return m
+
+
+# --- inbox, pairing, picking ------------------------------------------------------
+
+def test_build_inbox_picked_only_flagged_then_unread_first():
     inbox = build_inbox([dict(c) for c in CHATS], ["42", "-1001"])
     assert [c["title"] for c in inbox["chats"]] == ["Acme Work", "Alice"]
     assert inbox["totals"] == {"unread": 2, "chats": 1}
+    assert "picked" not in inbox["chats"][0]
     flagged = build_inbox([dict(c, flag="!" if c["id"] == "42" else "") for c in CHATS], ["-1001", "42"])
     assert [c["title"] for c in flagged["chats"]] == ["Alice", "Acme Work"]
-    assert "picked" not in inbox["chats"][0]
 
 
 def test_healthz_has_tagline(env):
     client, *_ = env
     body = client.get("/healthz").json()
-    assert body["ok"] and "Unofficial" in body["tagline"].title() and "Telegram API" in body["tagline"]
+    assert body["ok"] and "unofficial" in body["tagline"].lower() and "Telegram API" in body["tagline"]
 
 
 def test_wrong_code_and_missing_token_rejected(env):
@@ -85,81 +114,122 @@ def test_wrong_code_and_missing_token_rejected(env):
     assert client.get("/chats", headers={"Authorization": "Bearer nope"}).status_code == 401
 
 
-def test_pick_chats_then_websocket_inbox(env):
+def test_picks_are_validated_against_real_dialogs(env):
     client, store, headers, token = env
-    assert len(client.get("/chats", headers=headers).json()["chats"]) == 3
-    assert client.put("/picked", headers=headers, json={"chatIds": ["-1001", "42"]}).json() == {"ok": True}
+    r = client.put("/picked", headers=headers, json={"chatIds": ["-1001", "42", "999", "42"]})
+    assert r.json() == {"ok": True, "picked": 2}
     assert store.picked() == ["-1001", "42"]
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "hello", "token": token})
-        inbox = ws.receive_json()
-        assert inbox["type"] == "inbox" and inbox["totals"]["unread"] == 2
-        ws.send_json({"type": "open_inbox"})
-        assert ws.receive_json()["chats"][0]["title"] == "Acme Work"
+        assert ws.receive_json()["totals"]["unread"] == 2
 
 
-def test_websocket_rejects_unpaired(env):
+def test_websocket_rejects_unpaired_and_bad_hello(env):
     client, *_ = env
-    with client.websocket_connect("/ws") as ws:
-        ws.send_json({"type": "hello", "token": "nope"})
-        assert ws.receive_json()["code"] == "unpaired"
-        with pytest.raises(WebSocketDisconnect):
-            ws.receive_json()
+    for hello in ({"type": "hello", "token": "nope"}, ["not", "an", "object"]):
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json(hello)
+            assert ws.receive_json()["code"] == "unpaired"
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
 
 
-def _ws(client, token):
-    ws = client.websocket_connect("/ws").__enter__()
-    ws.send_json({"type": "hello", "token": token})
+def test_malformed_frame_does_not_drop_the_connection(env):
+    client, _, _, token = env
+    ws = _ws(client, token)
+    ws.send_text("{not json")
+    ws.send_json({"type": "open_inbox"})
     assert ws.receive_json()["type"] == "inbox"
-    return ws
+    ws.close()
 
 
-def test_open_chat_only_for_picked(env):
+# --- cards and read state -----------------------------------------------------------
+
+def test_open_chat_marks_read_only_when_card_shown(env):
     client, store, _, token = env
-    store.set_picked(["-1001"])
+    store.set_picked(["-1001", "-1002"])
     ws = _ws(client, token)
     ws.send_json({"type": "open_chat", "chatId": "42"})
     err = ws.receive_json()
     assert err["code"] == "not_picked" and err["for"] == "open_chat" and err["chatId"] == "42"
+    ws.send_json({"type": "open_chat", "chatId": "-1002"})
+    assert ws.receive_json()["code"] == "channel"
     ws.send_json({"type": "open_chat", "chatId": "-1001"})
-    assert ws.receive_json()["type"] == "card"
-    assert ws.receive_json()["type"] == "inbox"  # counts refresh after read-on-show
-    assert client.tg.opened == ["-1001"]
+    card = ws.receive_json()
+    assert card["type"] == "card" and card["readMaxId"] == 7
+    assert not [c for c in client.tg.calls if c[0] == "read"]  # nothing marked read yet
+    ws.send_json({"type": "card_shown", "chatId": "-1001", "maxId": 7})
+    assert ws.receive_json()["type"] == "inbox"
+    assert ("read", "-1001", 7) in client.tg.calls
     ws.close()
 
 
-def test_send_reply_dedupe_and_picked_only(env):
+# --- sending ------------------------------------------------------------------------------
+
+def test_send_reply_and_reaction_only_to_picked_non_channels(env):
     client, store, _, token = env
-    store.set_picked(["-1001"])
+    store.set_picked(["-1001", "-1002"])
     ws = _ws(client, token)
     ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "text": " Works for me ", "clientMsgId": "a1"})
-    r = ws.receive_json()
-    assert r["ok"] and r["clientMsgId"] == "a1"
-    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "text": "again", "clientMsgId": "a1"})
-    ws.send_json({"type": "send", "chatId": "42", "text": "hi", "clientMsgId": "a2"})
-    r = ws.receive_json()
-    assert r["clientMsgId"] == "a2" and not r["ok"]
-    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "reaction": "👍", "clientMsgId": "a3"})
     assert ws.receive_json()["ok"]
-    assert client.tg.sent == [("-1001", 5, "Works for me", None), ("-1001", 5, None, "👍")]
+    ws.send_json({"type": "send", "chatId": "42", "text": "hi", "clientMsgId": "a2"})
+    assert not ws.receive_json()["ok"]
+    ws.send_json({"type": "send", "chatId": "-1002", "text": "hi", "clientMsgId": "a3"})
+    assert ws.receive_json()["human"] == "You can't reply to a channel"
+    ws.send_json({"type": "send", "chatId": "-1001", "replyTo": 5, "reaction": "👍", "clientMsgId": "a4"})
+    assert ws.receive_json()["ok"]
+    assert client.tg.sends() == [("send", "-1001", 5, "Works for me", None), ("send", "-1001", 5, None, "👍")]
     ws.close()
 
 
-def test_send_failure_and_rate_limit(env):
+def test_retry_with_same_id_never_sends_twice(env):
     client, store, _, token = env
     store.set_picked(["-1001"])
     ws = _ws(client, token)
-    client.tg.fail = True
+    ws.send_json({"type": "send", "chatId": "-1001", "text": "On it", "clientMsgId": "r1"})
+    ws.send_json({"type": "send", "chatId": "-1001", "text": "On it", "clientMsgId": "r1"})
+    first, second = ws.receive_json(), ws.receive_json()
+    assert first == second and first["ok"]
+    ws.close()
+    ws2 = _ws(client, token)  # a reconnect keeps the result too
+    ws2.send_json({"type": "send", "chatId": "-1001", "text": "On it", "clientMsgId": "r1"})
+    assert ws2.receive_json()["ok"]
+    assert len(client.tg.sends()) == 1
+    ws2.close()
+
+
+def test_failed_send_can_be_retried_with_same_id(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    client.tg.fail_send = True
     ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": "f"})
     assert not ws.receive_json()["ok"]
-    client.tg.fail = False
-    results = []
-    for i in range(11):
-        ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": f"r{i}"})
-        results.append(ws.receive_json()["ok"])
-    assert results.count(True) == 9 and results[-1] is False  # 10 per minute, the failed one counted
+    client.tg.fail_send = False
+    ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": "f"})
+    assert ws.receive_json()["ok"]
+    assert len(client.tg.sends()) == 1
     ws.close()
 
+
+def test_rate_limit_is_shared_across_reconnects(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    for i in range(6):
+        ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": f"a{i}"})
+        assert ws.receive_json()["ok"]
+    ws.close()
+    ws = _ws(client, token)
+    results = []
+    for i in range(5):
+        ws.send_json({"type": "send", "chatId": "-1001", "text": "x", "clientMsgId": f"b{i}"})
+        results.append(ws.receive_json()["ok"])
+    assert results == [True, True, True, True, False]
+    ws.close()
+
+
+# --- mute, digest, dictation ----------------------------------------------------------
 
 def test_mute_and_snooze_hide_chat(env):
     client, store, _, token = env
@@ -167,10 +237,10 @@ def test_mute_and_snooze_hide_chat(env):
     ws = _ws(client, token)
     ws.send_json({"type": "mute", "chatId": "-1001", "minutes": 60})
     assert [c["id"] for c in ws.receive_json()["chats"]] == ["-1002"]
-    assert client.tg.muted == [("-1001", 60)]
+    assert ("mute", "-1001", 60) in client.tg.calls
     ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": 30})
     assert ws.receive_json()["chats"] == []
-    ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": 9999})
+    ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": "lots"})
     assert ws.receive_json()["code"] == "bad_request"
     ws.close()
 
@@ -188,35 +258,46 @@ def test_digest_only_picked_channels_and_explicit_done(env):
     ws.send_json({"type": "sponsored_viewed", "randomId": "abc"})
     ws.send_json({"type": "open_inbox"})
     assert ws.receive_json()["type"] == "inbox"
-    assert client.tg.muted == [("read", "-1002", 9), ("view", "abc")]
+    assert ("read", "-1002", 9) in client.tg.calls and ("view", "abc") in client.tg.calls
     ws.close()
 
 
-def test_dictation_roundtrip(env):
+def test_dictation_roundtrip_echoes_id(env):
     client, store, _, token = env
     ws = _ws(client, token)
-    ws.send_json({"type": "audio_begin"})
+    ws.send_json({"type": "audio_begin", "id": "d1"})
     for _ in range(10):
         ws.send_bytes(b"\0" * 3200)  # 10 x 100 ms
     ws.send_json({"type": "audio_end"})
-    assert ws.receive_json() == {"type": "stt", "text": "heard 32000 bytes", "human": ""}
-    ws.send_json({"type": "audio_begin"})
+    assert _until(ws, "stt") == {"type": "stt", "id": "d1", "text": "heard 32000 bytes", "human": ""}
+    ws.send_json({"type": "audio_begin", "id": "d2"})
     ws.send_bytes(b"\0" * 100)
     ws.send_json({"type": "audio_end"})
-    assert ws.receive_json()["human"].startswith("Too short")
+    short = _until(ws, "stt")
+    assert short["id"] == "d2" and short["human"].startswith("Too short")
     ws.send_bytes(b"\0" * 32000)  # no dictation in progress: ignored
-    ws.send_json({"type": "audio_begin"})
+    ws.send_json({"type": "audio_begin", "id": "d3"})
     ws.send_bytes(b"x" * 32000)
     ws.send_json({"type": "audio_end"})
-    assert ws.receive_json()["human"] == "Speech-to-text is offline"
+    assert _until(ws, "stt") == {"type": "stt", "id": "d3", "text": "", "human": "Speech-to-text is offline"}
     ws.close()
 
+
+# --- log out & wipe -------------------------------------------------------------------------
 
 def test_logout_wipes_devices_and_picks(env):
     client, store, headers, token = env
     store.set_picked(["-1001"])
     assert client.post("/logout").status_code == 401
     assert client.post("/logout", headers=headers).json() == {"ok": True}
-    assert client.tg.muted == ["logout"]
+    assert ("logout",) in client.tg.calls
     assert store.picked() == [] and not store.is_device(token)
     assert client.get("/chats", headers=headers).status_code == 401
+
+
+def test_logout_reports_when_telegram_did_not_confirm(env):
+    client, store, headers, token = env
+    client.tg.logout_ok = False
+    r = client.post("/logout", headers=headers)
+    assert r.status_code == 502 and "Devices" in r.json()["detail"]
+    assert not store.is_device(token)  # local data is wiped either way

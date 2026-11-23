@@ -92,10 +92,12 @@ class Telegram:
             StringSession(session_store.load(cfg.session_file, cfg.key_file)),
             cfg.api_id,
             cfg.api_hash,
-            flood_sleep_threshold=60,
+            # Sleep through short flood waits only; a long one fails fast so the glasses can say so.
+            flood_sleep_threshold=15,
         )
         self._on_change: Callable[[], Awaitable[None]] | None = None
         self._change_task: asyncio.Task | None = None
+        self._dirty = False
         self._sponsored: dict[str, tuple[float, dict | None]] = {}
         self._sponsored_ids: set[bytes] = set()
 
@@ -114,18 +116,24 @@ class Telegram:
         self._on_change = callback
 
     async def _changed(self, _event) -> None:
-        # Coalesce bursts of updates into one refresh about a second later.
-        if self._on_change is None or (self._change_task and not self._change_task.done()):
+        # Coalesce bursts of updates into one refresh about a second later. Updates that arrive
+        # while a refresh is running mark it dirty, and the refresh runs again afterwards.
+        if self._on_change is None:
+            return
+        self._dirty = True
+        if self._change_task and not self._change_task.done():
             return
 
-        async def later() -> None:
-            await asyncio.sleep(1.0)
-            try:
-                await self._on_change()
-            except Exception:  # never let a refresh error kill the update loop
-                log.exception("inbox refresh failed")
+        async def refresh() -> None:
+            while self._dirty:
+                self._dirty = False
+                await asyncio.sleep(1.0)
+                try:
+                    await self._on_change()
+                except Exception:  # never let a refresh error kill the update loop
+                    log.exception("inbox refresh failed")
 
-        self._change_task = asyncio.create_task(later())
+        self._change_task = asyncio.create_task(refresh())
 
     async def chats(self, picked: list[str]) -> list[dict]:
         """Main chat list only: archived chats are never offered or shown."""
@@ -156,10 +164,15 @@ class Telegram:
         )
         kind = "user" if hasattr(entity, "first_name") else ("channel" if getattr(entity, "broadcast", False) else "group")
         card = build_card({"id": chat_id, "title": title or "(no name)", "kind": kind}, recent, unread)
-        if history:
-            # Telegram API terms 1.4: no "ghost mode". What is shown is marked read.
-            await self.client.send_read_acknowledge(entity, max_id=max(m.id for m in history[: max(1, min(3, unread))]))
+        # Marked read only when the glasses report the card as displayed (card_shown).
+        card["readMaxId"] = max((m["id"] for m in card["msgs"]), default=None)
         return card
+
+    async def chat_kind(self, chat_id: str) -> str:
+        entity = await self.client.get_entity(int(chat_id))
+        if hasattr(entity, "first_name"):
+            return "user"
+        return "channel" if getattr(entity, "broadcast", False) else "group"
 
     async def send(self, chat_id: str, reply_to: int | None, text: str | None, reaction: str | None) -> None:
         entity = await self.client.get_entity(int(chat_id))
@@ -258,9 +271,14 @@ class Telegram:
         entity = await self.client.get_entity(int(chat_id))
         await self.client.send_read_acknowledge(entity, max_id=max_id)
 
-    async def log_out(self) -> None:
-        """Ends this Telegram session on Telegram's side (auth.logOut) and wipes it locally."""
+    async def log_out(self) -> bool:
+        """Ends this Telegram session on Telegram's side (auth.logOut) and always wipes it locally.
+
+        Returns False if Telegram didn't confirm the logout.
+        """
         try:
-            await self.client.log_out()
+            return bool(await self.client.log_out())
         finally:
             session_store.wipe(self._cfg.session_file, self._cfg.key_file)
+            if self.client.is_connected():
+                await self.client.disconnect()
