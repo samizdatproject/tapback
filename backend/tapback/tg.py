@@ -27,7 +27,7 @@ from telethon.tl.types.messages import SponsoredMessages
 
 from . import config, session_store
 from .cards import build_card
-from .digest import top_posts
+from .digest import strip_emoji, top_posts
 
 SPONSORED_CACHE_S = 300  # getSponsoredMessages: "The result must be cached for 5 minutes"
 
@@ -181,9 +181,10 @@ class Telegram:
             ad = {
                 "randomId": base64.urlsafe_b64encode(m.random_id).decode(),
                 "label": "Recommended" if m.recommended else "Sponsored",
-                "title": m.title,
-                "text": m.message,
-                "button": m.button_text,
+                # Verbatim, minus emoji the G2 font draws as empty boxes.
+                "title": " ".join(strip_emoji(m.title or "").split()),
+                "text": " ".join(strip_emoji(m.message or "").split()),
+                "button": " ".join(strip_emoji(m.button_text or "").split()),
                 "sponsorInfo": m.sponsor_info,
                 "additionalInfo": m.additional_info,
             }
