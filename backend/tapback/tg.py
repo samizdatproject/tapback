@@ -56,7 +56,7 @@ class Telegram:
             raise SystemExit("The saved session is no longer valid. Run: python -m tapback login")
         self.client.add_event_handler(self._changed, events.NewMessage())
         self.client.add_event_handler(self._changed, events.MessageRead())
-        await self.client.get_dialogs(limit=self._dialog_limit)  # fills the entity cache
+        await self.client.get_dialogs(limit=self._dialog_limit, archived=False)  # fills the entity cache
 
     async def stop(self) -> None:
         await self.client.disconnect()
@@ -79,6 +79,7 @@ class Telegram:
         self._change_task = asyncio.create_task(later())
 
     async def chats(self, picked: list[str]) -> list[dict]:
+        """Main chat list only: archived chats are never offered or shown."""
         picked_set = set(picked)
-        dialogs = await self.client.get_dialogs(limit=self._dialog_limit)
+        dialogs = await self.client.get_dialogs(limit=self._dialog_limit, archived=False)
         return [chat_row(d, picked_set) for d in dialogs]
