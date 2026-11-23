@@ -6,13 +6,14 @@ A message dict: {id, sender, time, text, mine, mentions_me}.
 from __future__ import annotations
 
 from . import rules
+from .digest import strip_emoji
 
 MAX_MSGS = 3
 MAX_TEXT = 280
 
 
 def cut(text: str, limit: int = MAX_TEXT) -> str:
-    text = " ".join((text or "").split())
+    text = " ".join(strip_emoji(text or "").split())
     if len(text) <= limit:
         return text
     head = text[: limit - 1]

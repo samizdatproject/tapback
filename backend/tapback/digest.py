@@ -16,7 +16,11 @@ LINE_MAX = 120
 
 _URL = re.compile(r"https?://\S+|www\.\S+")
 # Emoji and pictographs don't render on the G2 font; drop them from the shown line.
-_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D\u20E3]")
+
+
+def strip_emoji(text: str) -> str:
+    return _EMOJI.sub("", text)
 
 
 def first_line(text: str, limit: int = LINE_MAX) -> str:

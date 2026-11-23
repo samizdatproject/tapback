@@ -84,11 +84,14 @@ class Session:
         self.sends: deque[float] = deque()
         self.seen_ids: deque[str] = deque(maxlen=100)
         self.recorder = stt.Recorder()
+        self.current: dict = {}
 
     async def audio(self, chunk: bytes) -> None:
         self.recorder.add(chunk)
 
     async def reply(self, msg: dict) -> None:
+        if msg.get("type") == "error":
+            msg = {**self.current, **msg}  # which request failed, so the plugin can match it
         await self.ws.send_text(json.dumps(msg))
 
     def _picked(self, chat_id) -> str | None:
@@ -97,6 +100,7 @@ class Session:
 
     async def handle(self, msg: dict) -> None:
         kind = msg.get("type")
+        self.current = {"for": kind, "chatId": str(msg.get("chatId") or msg.get("channelId") or "")}
         if kind == "open_inbox":
             await self.reply(await self.hub.inbox())
         elif kind == "open_chat":
@@ -247,7 +251,7 @@ def create_app(tg: Telegram, store: Store, transcribe: Transcriber = stt.transcr
                     raise
                 except Exception as exc:
                     log.warning("request failed: %s", type(exc).__name__)
-                    await ws.send_text(json.dumps({"type": "error", "code": "failed", "human": "Something went wrong"}))
+                    await session.reply({"type": "error", "code": "failed", "human": "Something went wrong"})
         except (WebSocketDisconnect, asyncio.TimeoutError, json.JSONDecodeError):
             pass
         finally:

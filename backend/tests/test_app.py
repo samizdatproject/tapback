@@ -114,7 +114,8 @@ def test_open_chat_only_for_picked(env):
     store.set_picked(["-1001"])
     ws = _ws(client, token)
     ws.send_json({"type": "open_chat", "chatId": "42"})
-    assert ws.receive_json()["code"] == "not_picked"
+    err = ws.receive_json()
+    assert err["code"] == "not_picked" and err["for"] == "open_chat" and err["chatId"] == "42"
     ws.send_json({"type": "open_chat", "chatId": "-1001"})
     assert ws.receive_json()["type"] == "card"
     assert ws.receive_json()["type"] == "inbox"  # counts refresh after read-on-show

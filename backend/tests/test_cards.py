@@ -40,3 +40,7 @@ def test_card_when_all_mine_has_no_target_and_fallback_suggestions():
     card = build_card(CHAT, [m(1, "Me", text="ok", mine=True)], unread=1)
     assert card["replyTo"] is None
     assert card["suggestions"][0] == "Got it"
+
+
+def test_cut_drops_emoji_the_glasses_cannot_draw():
+    assert cut("🇺🇸 JUST IN : 🔥 Arthur Hayes") == "JUST IN : Arthur Hayes"
