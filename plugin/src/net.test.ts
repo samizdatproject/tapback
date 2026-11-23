@@ -63,6 +63,8 @@ describe('parse day-5 fields', () => {
     expect(inbox?.type === 'inbox' && inbox.chats.map(c => c.flag)).toEqual(['!', undefined])
     const card = parseServerMsg('{"type":"card","chat":{"id":1,"title":"A","kind":"user"},"msgs":[],"readMaxId":42}')
     expect(card?.type === 'card' && card.readMaxId).toBe(42)
+    const vip = parseServerMsg('{"type":"inbox","chats":[{"id":1,"title":"A","kind":"group","unread":1,"flag":"★"}],"totals":{},"quiet":{"active":true,"until":"08:00"}}')
+    expect(vip?.type === 'inbox' && [vip.chats[0].flag, vip.quiet]).toEqual(['★', { active: true, until: '08:00' }])
     expect(parseServerMsg('{"type":"stt","id":"d1","text":" hi ","human":""}')).toEqual({ type: 'stt', id: 'd1', text: 'hi', human: '' })
   })
 })

@@ -51,6 +51,15 @@ describe('inbox rows', () => {
     expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
   })
 
+  it('prefixes VIP chats with ★ within the same limits', () => {
+    expect(inboxRow({ ...chat('Acme Work', 1), flag: '★' })).toBe('★ Acme Work · 1')
+    const row = inboxRow({ ...chat('A very long group title that keeps going and going and going on', 12), flag: '★' })
+    expect(row.startsWith('★ ')).toBe(true)
+    expect(row.endsWith('… · 12')).toBe(true)
+    expect(bytes(row)).toBeLessThanOrEqual(ROW_MAX_BYTES)
+    expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
+  })
+
   it('caps big counts and the number of rows', () => {
     expect(inboxRow(chat('Busy', 12345))).toBe('Busy · 999+')
     expect(inboxRows(Array.from({ length: 30 }, (_, i) => chat(`c${i}`)))).toHaveLength(LIST_MAX_ITEMS)
@@ -63,6 +72,12 @@ describe('header and footer', () => {
     expect(headerText({ unread: 1, chats: 1 })).toBe('TapBack · 1 new in 1 chat')
     expect(headerText({ unread: 0, chats: 0 })).toBe('TapBack · all caught up')
     expect(headerText(null)).toBe('TapBack')
+  })
+
+  it('says when quiet hours are on', () => {
+    expect(headerText({ unread: 3, chats: 2 }, { active: true, until: '08:00' })).toBe('Quiet until 08:00 · 3 new')
+    expect(headerText({ unread: 0, chats: 0 }, { active: true, until: '08:00' })).toBe('Quiet until 08:00')
+    expect(headerText({ unread: 3, chats: 2 }, { active: false, until: '08:00' })).toBe('TapBack · 3 new in 2 chats')
   })
 
   it('says when offline', () => {

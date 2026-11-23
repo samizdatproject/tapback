@@ -25,7 +25,7 @@ export function fit(text: string, maxChars: number, maxBytes = Infinity): string
 }
 
 export function inboxRow(chat: InboxChat): string {
-  const prefix = chat.flag === '!' ? '! ' : ''
+  const prefix = chat.flag ? `${chat.flag} ` : ''
   const suffix = chat.unread > 0 ? ` · ${chat.unread > 999 ? '999+' : chat.unread}` : ''
   const title = chat.title.replace(/\s+/g, ' ').trim() || 'Untitled chat'
   const extra = prefix + suffix
@@ -39,7 +39,11 @@ export function inboxRows(chats: InboxChat[]): string[] {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-export function headerText(totals: Totals | null): string {
+export function headerText(totals: Totals | null, quiet?: { active: boolean; until: string }): string {
+  if (quiet?.active) {
+    const head = quiet.until ? `Quiet until ${quiet.until}` : 'Quiet hours'
+    return totals && totals.unread > 0 ? `${head} · ${totals.unread} new` : head
+  }
   if (!totals) return 'TapBack'
   if (totals.unread <= 0) return 'TapBack · all caught up'
   return `TapBack · ${totals.unread} new in ${plural(totals.chats, 'chat')}`

@@ -10,7 +10,7 @@ export const MENU_REFRESH = 1
  */
 export function inboxPage(state: State, rows: string[] | null, stale: boolean): Page {
   const texts: Page['texts'] = [
-    { name: 'hdr', ...HEADER, content: headerText(state.inbox?.totals ?? null) },
+    { name: 'hdr', ...HEADER, content: headerText(state.inbox?.totals ?? null, state.inbox?.quiet) },
     { name: 'ftr', ...FOOTER, content: footerText(state.link, stale), dim: true },
   ]
   const page: Page = { id: 'inbox', texts, menu: [{ name: 'Refresh', id: MENU_REFRESH }] }

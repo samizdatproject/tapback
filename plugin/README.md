@@ -81,7 +81,8 @@ src/
   has changed, and **Refresh** in the glasses menu redraws it. Saving a new pick
   on the phone, or coming back from a card, also redraws it.
 - **Inbox rows** for chats that mention you or match an urgent word start with
-  `!` (the server lists them first). A channel row opens the Digest at that
+  `!`, and chats with a message from a VIP start with `★` (the server lists them
+  first). During quiet hours the header reads `Quiet until 08:00 · 3 new`. A channel row opens the Digest at that
   channel.
 - **Card**: tap a chat to open its newest messages. The chat is marked read in
   Telegram only once the card is actually on the glasses. The body always fits the screen so swipes reach the app. Swipe ▼/▲
@@ -108,7 +109,9 @@ src/
 
 ## Phone screen
 
-Pairing, the chat picker, **Unpair** (forget this device's token), **Log out &
+Pairing, the chat picker, **Triage** (VIP senders get `★`, urgent words get `!`,
+and quiet hours, during which the glasses show counts only and never move on by
+themselves), **Unpair** (forget this device's token), **Log out &
 wipe** (asks for a second tap within 5 s, then signs the server out of Telegram
 and deletes its session), and a short privacy summary. If the server revokes the
 device, the plugin returns to pairing.

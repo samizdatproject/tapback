@@ -21,7 +21,7 @@ let glasses: Glasses | null = null
 
 // One handler per server message type.
 const onServer: { [K in ServerMsg['type']]: (msg: Extract<ServerMsg, { type: K }>) => void } = {
-  inbox: msg => store.set({ inbox: { chats: msg.chats, totals: msg.totals } }),
+  inbox: ({ type: _, ...inbox }) => store.set({ inbox }),
   card: ({ type: _, ...card }) => glasses?.onCard(card),
   sent: ({ type: _, ...sent }) => glasses?.onSent(sent),
   stt: ({ type: _, ...stt }) => glasses?.onStt(stt),
@@ -98,6 +98,11 @@ mountCompanion(document.querySelector<HTMLElement>('#app')!, store, {
       if (err instanceof HttpError && err.status === 502) await unpair(err.message)
       else throw err
     }
+  },
+  loadSettings: () => authed(api.getSettings),
+  saveSettings: async settings => {
+    const { ok: _, ...saved } = await authed((base, token) => api.putSettings(base, token, settings))
+    return saved
   },
   async savePicked(chatIds) {
     await authed((base, token) => api.putPicked(base, token, chatIds))

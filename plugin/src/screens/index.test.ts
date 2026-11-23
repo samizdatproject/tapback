@@ -403,4 +403,22 @@ describe('Glasses leaving mid-dictation', () => {
     expect(t.page().id).toBe('inbox')
     expect(t.texts.at(-1)?.[1]).toContain('TapBack')
   })
+
+  it('quiet hours: after a send it goes back to the Inbox instead of opening the next chat', () => {
+    const chats = [chat('a', 1), chat('b', 2)]
+    const t = setup(chats)
+    t.g.render({ ...state(chats), inbox: { ...state(chats).inbox!, quiet: { active: true, until: '08:00' } } })
+    expect(t.texts.at(-2)).toEqual(['hdr', 'Quiet until 08:00 · 3 new'])
+    t.g.input({ kind: 'LIST_SELECT', index: 0 }) // manual opening still works
+    t.g.onCard(card('a'))
+    t.g.input({ kind: 'CLICK' })
+    t.g.input({ kind: 'LIST_SELECT', index: 0 })
+    vi.advanceTimersByTime(2000)
+    const send = t.sent.at(-1) as { clientMsgId: string }
+    t.g.onSent({ clientMsgId: send.clientMsgId, ok: true, at: '14:02' })
+    expect(t.texts.at(-1)).toEqual(['msg', 'Sent ● 14:02 · back to inbox (quiet hours)'])
+    vi.advanceTimersByTime(1000)
+    expect(t.page().id).toBe('inbox')
+    expect(t.sent.filter(m => m.type === 'open_chat')).toHaveLength(1)
+  })
 })

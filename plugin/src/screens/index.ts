@@ -122,7 +122,7 @@ export class Glasses {
     }
     if (state.inbox && state.inbox !== this.lastInbox) this.entry = false
     this.lastInbox = state.inbox
-    this.screens.setText('hdr', this.inboxStatus ?? headerText(state.inbox?.totals ?? null))
+    this.screens.setText('hdr', this.inboxStatus ?? headerText(state.inbox?.totals ?? null, state.inbox?.quiet))
     this.screens.setText('ftr', footerText(state.link, this.stale))
   }
 
@@ -438,8 +438,14 @@ export class Glasses {
     const view = this.view
     if (view.name !== 'sending' || view.flow !== flow) return
     if (phase.phase === 'sent') {
-      const next = neighbour(this.order, this.chats, view.card.chat.id, 1)
-      view.ctx.after = next ? `next: ${next.title.trim() || 'chat'} (${next.unread})` : 'back to inbox'
+      // Quiet hours: nothing moves on by itself.
+      const quiet = this.state?.inbox?.quiet?.active === true
+      const next = quiet ? null : neighbour(this.order, this.chats, view.card.chat.id, 1)
+      view.ctx.after = next
+        ? `next: ${next.title.trim() || 'chat'} (${next.unread})`
+        : quiet
+          ? 'back to inbox (quiet hours)'
+          : 'back to inbox'
       this.later(() => (next ? this.open(next) : this.toInbox()))
     } else if (phase.phase === 'cancelled') {
       this.later(() => this.showReplies(view.card))
@@ -455,7 +461,7 @@ export class Glasses {
     switch (view.name) {
       case 'inbox':
         this.inboxStatus = text
-        this.screens.setText('hdr', text ?? headerText(this.state?.inbox?.totals ?? null))
+        this.screens.setText('hdr', text ?? headerText(this.state?.inbox?.totals ?? null, this.state?.inbox?.quiet))
         break
       case 'card':
         this.screens.setText('hdr', text ?? cardHeader(view.card, position(this.order, this.chats, view.card.chat.id)))

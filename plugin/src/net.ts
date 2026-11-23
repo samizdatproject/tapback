@@ -6,8 +6,8 @@ export interface InboxChat {
   title: string
   kind: ChatKind
   unread: number
-  /** "!" for a mention of me or an urgent keyword (the server sorts these first). */
-  flag?: '!' | ''
+  /** "!" mention or urgent word, "★" message from a VIP sender (the server sorts these first). */
+  flag?: '!' | '★' | ''
 }
 export interface Chat extends InboxChat {
   picked: boolean
@@ -19,6 +19,15 @@ export interface Totals {
 export interface Inbox {
   chats: InboxChat[]
   totals: Totals
+  /** Quiet hours: the glasses show counts only and never move on by themselves. */
+  quiet?: { active: boolean; until: string }
+}
+
+/** Triage settings, edited on the phone screen. */
+export interface Settings {
+  vip: string[]
+  keywords: string[]
+  quiet: { enabled: boolean; start: string; end: string }
 }
 
 export interface CardMsg {
@@ -118,7 +127,7 @@ function parseChat(raw: unknown): InboxChat | null {
   if (!c || c.id === undefined || c.id === null) return null
   const kind = c.kind === 'group' || c.kind === 'channel' ? c.kind : 'user'
   const chat: InboxChat = { id: String(c.id), title: str(c.title), kind, unread: num(c.unread) }
-  if (c.flag === '!') chat.flag = '!'
+  if (c.flag === '!' || c.flag === '★') chat.flag = c.flag
   return chat
 }
 
@@ -189,7 +198,13 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
         ? msg.chats.map(parseChat).filter((c): c is InboxChat => c !== null)
         : []
       const t = (msg.totals ?? {}) as Record<string, unknown>
-      return { type: 'inbox', chats, totals: { unread: num(t.unread), chats: num(t.chats) } }
+      const q = rec(msg.quiet)
+      return {
+        type: 'inbox',
+        chats,
+        totals: { unread: num(t.unread), chats: num(t.chats) },
+        ...(q ? { quiet: { active: q.active === true, until: str(q.until) } } : {}),
+      }
     }
     case 'card': {
       const card = parseCard(msg)
@@ -285,6 +300,10 @@ export const api = {
   chats: (base: string, token: string) => request<{ chats: Chat[] }>(base, '/chats', { token }),
   putPicked: (base: string, token: string, chatIds: string[]) =>
     request<{ ok: boolean }>(base, '/picked', { method: 'PUT', token, body: { chatIds } }),
+  getSettings: (base: string, token: string) => request<Settings>(base, '/settings', { token }),
+  /** 400 with a human `detail` when the server rejects a value. */
+  putSettings: (base: string, token: string, settings: Settings) =>
+    request<{ ok: boolean } & Settings>(base, '/settings', { method: 'PUT', token, body: settings }),
   /** Signs the server out of Telegram and wipes its session. */
   logout: (base: string, token: string) => request<{ ok: boolean }>(base, '/logout', { method: 'POST', token }),
 }

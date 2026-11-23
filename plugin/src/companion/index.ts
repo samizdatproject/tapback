@@ -1,8 +1,10 @@
 import { HttpError, type Chat, type ChatKind } from '../net'
 import type { State, Store } from '../state'
+import { el, message } from './dom'
+import { triageSection, type TriageActions } from './triage'
 import './style.css'
 
-export interface CompanionActions {
+export interface CompanionActions extends TriageActions {
   pair(base: string, code: string): Promise<void>
   unpair(): Promise<void>
   /** Log the server out of Telegram and wipe its session. */
@@ -18,20 +20,6 @@ const GROUPS: { kind: ChatKind; label: string }[] = [
 ]
 
 const LINK_LABEL = { online: 'Online', connecting: 'Connecting…', offline: 'Offline · retrying' }
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const node = Object.assign(document.createElement(tag), props)
-  node.append(...children)
-  return node
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 /** The phone screen: pairing, chat picker, status. Chat titles only ever go in via textContent. */
 export function mountCompanion(root: HTMLElement, store: Store, actions: CompanionActions): void {
@@ -92,7 +80,8 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
     el('div', { className: 'row start' }, unpairButton, logoutButton),
     logoutHint,
   )
-  const pairedView = el('div', { className: 'stack' }, pickCard, deviceCard)
+  const triage = triageSection(actions)
+  const pairedView = el('div', { className: 'stack' }, pickCard, triage.element, deviceCard)
   const privacy = el(
     'section',
     { className: 'card' },
@@ -246,7 +235,10 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
     if (state.base !== shownBase) baseInput.value = shownBase = state.base
     // Load on pairing, and again once the server is back if that failed.
     const retry = state.link === 'online' && wasOnline === false && chats === 'failed'
-    if (paired && (wasPaired !== true || retry)) void loadChats().catch(err => say(message(err)))
+    if (paired && (wasPaired !== true || retry)) {
+      void loadChats().catch(err => say(message(err)))
+      void triage.load().catch(() => {}) // the section shows its own error
+    }
     wasPaired = paired
     wasOnline = state.link === 'online'
   }
