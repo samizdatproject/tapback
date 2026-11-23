@@ -142,12 +142,14 @@ class Telegram:
         return [chat_row(d, picked_set) for d in dialogs]
 
     async def card(self, chat_id: str) -> dict:
-        """The newest unread messages of one chat; showing them marks the chat read up to the newest one."""
+        """The newest messages of one chat (up to 3 unread). Marked read later, when shown (card_shown)."""
         entity = await self.client.get_entity(int(chat_id))
         peer = await self.client.get_input_entity(entity)
-        dialogs = await self.client(GetPeerDialogsRequest(peers=[peer]))
+        dialogs, history = await asyncio.gather(  # two round trips in parallel
+            self.client(GetPeerDialogsRequest(peers=[peer])),
+            self.client.get_messages(entity, limit=3),
+        )
         unread = int(dialogs.dialogs[0].unread_count) if dialogs.dialogs else 0
-        history = await self.client.get_messages(entity, limit=3)
         recent = [
             {
                 "id": msg.id,
