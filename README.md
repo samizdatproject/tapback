@@ -95,6 +95,8 @@ cd ../plugin && npm install && npm run dev
 Pair on the phone screen with the code the backend printed, pick your chats, and press Save.
 Or start everything at once with `scripts/run-local.sh`.
 
+A packaged plugin (`tapback.ehpk`, built with `npm run pack`) is attached to the [v0.1.0 release](https://github.com/samizdatproject/tapback/releases/tag/v0.1.0). It whitelists `localhost:8787`; for real glasses, add your TLS origin to `plugin/app.json` and re-pack.
+
 ### On real glasses
 
 In the simulator the plugin reaches the backend at `localhost`. On a phone, `localhost` is the phone, so the backend needs an HTTPS address the phone can reach. **Don't expose it over plain HTTP**: the device token, messages and audio would cross the network unencrypted. Put it behind TLS, for example `tailscale serve 8787` on a tailnet your phone is on, or a reverse proxy such as Caddy on a VPS, and add that `https://` and `wss://` origin to the `network` whitelist in `plugin/app.json`.
