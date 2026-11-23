@@ -149,6 +149,7 @@ class Session:
             cid = self._picked(msg.get("chatId"))
             if cid is not None and isinstance(msg.get("maxId"), int):
                 await self.hub.tg.mark_read(cid, msg["maxId"])
+                log.info("card shown: marked a chat read")
                 await self.hub.broadcast()
         elif kind == "send":
             await self.send(msg)
@@ -163,6 +164,7 @@ class Session:
             cid = self._picked(msg.get("channelId"))
             if cid is not None and isinstance(msg.get("maxId"), int):
                 await self.hub.tg.mark_read(cid, msg["maxId"])
+                log.info("digest done: marked a channel read")
                 await self.hub.broadcast()
         elif kind == "audio_begin":
             self.dictation_id = str(msg.get("id") or "")[:64]
