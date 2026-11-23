@@ -37,6 +37,9 @@ class Telegram(Protocol):
     async def card(self, chat_id: str) -> dict: ...
     async def send(self, chat_id: str, reply_to: int | None, text: str | None, reaction: str | None) -> None: ...
     async def mute(self, chat_id: str, minutes: int) -> None: ...
+    async def digest(self, channel_ids: list[str]) -> list[dict]: ...
+    async def mark_read(self, chat_id: str, max_id: int) -> None: ...
+    async def view_sponsored(self, random_id_b64: str) -> bool: ...
 
 
 class PairBody(BaseModel):
@@ -98,6 +101,20 @@ class Session:
             await self.hub.broadcast()
         elif kind == "send":
             await self.send(msg)
+        elif kind == "digest_open":
+            hidden = self.hub.store.hidden()
+            chats = await self.hub.tg.chats(self.hub.store.picked())
+            kinds = {c["id"]: c["kind"] for c in chats}
+            channels = [c for c in self.hub.store.picked() if kinds.get(c) == "channel" and c not in hidden]
+            await self.reply({"type": "digest", "channels": await self.hub.tg.digest(channels)})
+        elif kind == "digest_done":
+            # Explicit "done" tap only: nothing in a channel is marked read silently.
+            cid = self._picked(msg.get("channelId"))
+            if cid is not None and isinstance(msg.get("maxId"), int):
+                await self.hub.tg.mark_read(cid, msg["maxId"])
+                await self.hub.broadcast()
+        elif kind == "sponsored_viewed":
+            await self.hub.tg.view_sponsored(str(msg.get("randomId") or ""))
         elif kind in ("mute", "snooze"):
             cid = self._picked(msg.get("chatId"))
             minutes = int(msg.get("minutes") or 0)

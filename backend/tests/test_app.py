@@ -33,6 +33,16 @@ class FakeTG:
     async def mute(self, chat_id, minutes):
         self.muted.append((chat_id, minutes))
 
+    async def digest(self, channel_ids):
+        return [{"id": c, "title": "News", "newCount": 5, "top": [], "maxId": 9, "sponsored": None} for c in channel_ids]
+
+    async def mark_read(self, chat_id, max_id):
+        self.muted.append(("read", chat_id, max_id))
+
+    async def view_sponsored(self, rid):
+        self.muted.append(("view", rid))
+        return True
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -151,4 +161,21 @@ def test_mute_and_snooze_hide_chat(env):
     assert ws.receive_json()["chats"] == []
     ws.send_json({"type": "snooze", "chatId": "-1002", "minutes": 9999})
     assert ws.receive_json()["code"] == "bad_request"
+    ws.close()
+
+
+def test_digest_only_picked_channels_and_explicit_done(env):
+    client, store, _, token = env
+    store.set_picked(["-1001", "-1002"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "digest_open"})
+    d = ws.receive_json()
+    assert d["type"] == "digest" and [c["id"] for c in d["channels"]] == ["-1002"]
+    ws.send_json({"type": "digest_done", "channelId": "-1002", "maxId": 9})
+    assert ws.receive_json()["type"] == "inbox"
+    ws.send_json({"type": "digest_done", "channelId": "42", "maxId": 9})  # not picked: ignored
+    ws.send_json({"type": "sponsored_viewed", "randomId": "abc"})
+    ws.send_json({"type": "open_inbox"})
+    assert ws.receive_json()["type"] == "inbox"
+    assert client.tg.muted == [("read", "-1002", 9), ("view", "abc")]
     ws.close()

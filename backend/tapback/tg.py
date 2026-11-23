@@ -6,7 +6,9 @@ Message text is kept in memory only and never logged.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
@@ -14,11 +16,20 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.custom.dialog import Dialog
 from telethon.tl.functions.account import UpdateNotifySettingsRequest
-from telethon.tl.functions.messages import GetPeerDialogsRequest, SendReactionRequest
+from telethon.tl.functions.messages import (
+    GetPeerDialogsRequest,
+    GetSponsoredMessagesRequest,
+    SendReactionRequest,
+    ViewSponsoredMessageRequest,
+)
 from telethon.tl.types import InputNotifyPeer, InputPeerNotifySettings, ReactionEmoji
+from telethon.tl.types.messages import SponsoredMessages
 
 from . import config, session_store
 from .cards import build_card
+from .digest import top_posts
+
+SPONSORED_CACHE_S = 300  # getSponsoredMessages: "The result must be cached for 5 minutes"
 
 log = logging.getLogger("tapback.tg")
 
@@ -71,6 +82,8 @@ class Telegram:
         )
         self._on_change: Callable[[], Awaitable[None]] | None = None
         self._change_task: asyncio.Task | None = None
+        self._sponsored: dict[str, tuple[float, dict | None]] = {}
+        self._sponsored_ids: set[bytes] = set()
 
     async def start(self) -> None:
         await self.client.connect()
@@ -148,3 +161,84 @@ class Telegram:
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
         await self.client(UpdateNotifySettingsRequest(
             peer=InputNotifyPeer(entity), settings=InputPeerNotifySettings(mute_until=until)))
+
+    async def _dialog(self, entity):
+        peer = await self.client.get_input_entity(entity)
+        res = await self.client(GetPeerDialogsRequest(peers=[peer]))
+        return res.dialogs[0] if res.dialogs else None
+
+    async def sponsored(self, chat_id: str) -> dict | None:
+        """The channel's sponsored message, cached for 5 minutes as Telegram requires."""
+        cached = self._sponsored.get(chat_id)
+        if cached and time.monotonic() - cached[0] < SPONSORED_CACHE_S:
+            return cached[1]
+        entity = await self.client.get_entity(int(chat_id))
+        res = await self.client(GetSponsoredMessagesRequest(peer=entity))
+        ad = None
+        if isinstance(res, SponsoredMessages) and res.messages:
+            m = res.messages[0]
+            self._sponsored_ids.add(m.random_id)
+            ad = {
+                "randomId": base64.urlsafe_b64encode(m.random_id).decode(),
+                "label": "Recommended" if m.recommended else "Sponsored",
+                "title": m.title,
+                "text": m.message,
+                "button": m.button_text,
+                "sponsorInfo": m.sponsor_info,
+                "additionalInfo": m.additional_info,
+            }
+        self._sponsored[chat_id] = (time.monotonic(), ad)
+        return ad
+
+    async def view_sponsored(self, random_id_b64: str) -> bool:
+        """Reports one view of a sponsored message that TapBack actually displayed."""
+        try:
+            rid = base64.urlsafe_b64decode(random_id_b64.encode())
+        except ValueError:
+            return False
+        if rid not in self._sponsored_ids:
+            return False
+        self._sponsored_ids.discard(rid)  # one view per fetched ad
+        await self.client(ViewSponsoredMessageRequest(random_id=rid))
+        return True
+
+    async def digest(self, channel_ids: list[str]) -> list[dict]:
+        """For each channel: its new posts ranked by engagement (top 3, first line verbatim) and its ad."""
+        seen: set[str] = set()
+        out = []
+        now = datetime.now(timezone.utc)
+        for cid in channel_ids:
+            entity = await self.client.get_entity(int(cid))
+            dialog = await self._dialog(entity)
+            unread = int(dialog.unread_count) if dialog else 0
+            if unread:
+                posts = await self.client.get_messages(entity, min_id=dialog.read_inbox_max_id, limit=100)
+            else:  # nothing new: show the best of the last 24 hours, clearly labelled as not new
+                posts = [m for m in await self.client.get_messages(entity, limit=30)
+                         if (now - m.date).total_seconds() < 86400]
+            rows = [
+                {
+                    "id": m.id,
+                    "text": m.message or "",
+                    "views": m.views or 0,
+                    "reactions": sum(r.count for r in m.reactions.results) if m.reactions else 0,
+                    "forwards": m.forwards or 0,
+                    "pinned": bool(m.pinned),
+                    "age_h": (now - m.date).total_seconds() / 3600,
+                }
+                for m in posts
+            ]
+            out.append({
+                "id": cid,
+                "title": getattr(entity, "title", None) or "(channel)",
+                "newCount": unread,
+                "top": top_posts(rows, seen),
+                "recent": not unread,
+                "maxId": max((m.id for m in posts), default=None) if unread else None,
+                "sponsored": await self.sponsored(cid),
+            })
+        return out
+
+    async def mark_read(self, chat_id: str, max_id: int) -> None:
+        entity = await self.client.get_entity(int(chat_id))
+        await self.client.send_read_acknowledge(entity, max_id=max_id)
