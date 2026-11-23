@@ -1,6 +1,6 @@
 import sys
 
-USAGE = "usage: python -m tapback {login|gate} [options]"
+USAGE = "usage: python -m tapback {login|serve|pair|gate} [options]"
 
 
 def main() -> None:
@@ -9,6 +9,14 @@ def main() -> None:
         from .login import main as run
 
         run()
+    elif cmd == "serve":
+        from .serve import main as run
+
+        run(rest)
+    elif cmd == "pair":
+        from .serve import pair_main
+
+        pair_main()
     elif cmd == "gate":
         from .gate import main as run
 
