@@ -106,7 +106,7 @@ cd ../plugin && npm install && npm run dev
 Pair on the phone screen with the code the backend printed, pick your chats, and press Save.
 Or start everything at once with `scripts/run-local.sh`.
 
-A packaged plugin (`tapback.ehpk`, built with `npm run pack`) is attached to the [v0.1.0 release](https://github.com/samizdatproject/tapback/releases/tag/v0.1.0). It whitelists `localhost:8787`; for real glasses, add your TLS origin to `plugin/app.json` and re-pack.
+A packaged plugin (`tapback.ehpk`, built with `npm run pack`) is attached to the [v0.2.0 release](https://github.com/samizdatproject/tapback/releases/tag/v0.2.0). It whitelists `localhost:8787`; for real glasses, add your TLS origin to `plugin/app.json` and re-pack.
 
 ### On real glasses
 
