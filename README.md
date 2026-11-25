@@ -8,7 +8,7 @@ TapBack shows the Telegram chats you pick, one card at a time, on the G2 display
 
 Built for the [Heads Up: Even Realities hackathon](https://dorahacks.io/hackathon/even-realities/detail) (Nov 23–29, 2026), track 01 · Messaging & News.
 
-**▶ [Watch the demo video](https://samizdatproject.github.io/tapback/tapback-demo.mp4)** (72 s, captions only; file: [`docs/tapback-demo.mp4`](docs/tapback-demo.mp4)). Recorded in one take: the Even Hub simulator on the left, Telegram Desktop on the same real account on the right, with demo chats.
+**▶ [Watch the demo video](https://samizdatproject.github.io/tapback/tapback-demo.mp4)** (1 min 54 s, captions only; file: [`docs/tapback-demo.mp4`](docs/tapback-demo.mp4)). Recorded in one take: the Even Hub simulator on the left, Telegram Desktop on the same real account on the right, with demo chats.
 
 ## On the glasses
 
