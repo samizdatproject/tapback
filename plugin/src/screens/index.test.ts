@@ -195,6 +195,67 @@ describe('Glasses', () => {
     expect(sent.filter(m => m.type === 'open_chat')).toHaveLength(1)
   })
 
+  it('"Translate" asks the server for the card\'s messages and shows Telegram\'s translation in place', () => {
+    const { g, sent, texts, page, pages } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard({ ...card('a'), msgs: [...card('a').msgs, { id: 8, sender: 'Lee', time: '14:02', text: '[photo]', mine: false }] })
+    expect(page().menu?.[1]).toEqual({ name: 'Translate', id: 8 })
+    const shownBefore = sent.filter(m => m.type === 'card_shown').length
+    g.input({ kind: 'MENU', itemId: 8 })
+    expect(sent.at(-1)).toEqual({ type: 'translate', chatId: 'a', ids: [7, 8] })
+    expect(texts.at(-1)).toEqual(['hdr', 'Translating…'])
+    g.onTranslation({ chatId: 'b', items: [{ id: 7, text: 'nope' }], lang: 'en' }) // another chat
+    expect(texts.at(-1)).toEqual(['hdr', 'Translating…'])
+    const pageCount = pages.length
+    g.onTranslation({ chatId: 'a', items: [{ id: 7, text: 'hello' }], lang: 'en' })
+    expect(texts.slice(-2)).toEqual([
+      ['body', 'Dana 14:01\nhello\nLee 14:02\n[photo]'],
+      ['hdr', 'a · 1 new · translated  1/2'],
+    ])
+    expect(pages.length).toBe(pageCount) // drawn in place, not a new page
+    expect(sent.filter(m => m.type === 'card_shown').length).toBe(shownBefore) // not marked read twice
+  })
+
+  it('a second "Translate" shows the original, and a third uses the translation it has', () => {
+    const { g, sent, texts } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 8 })
+    g.onTranslation({ chatId: 'a', items: [{ id: 7, text: 'hello' }], lang: 'en' })
+    g.input({ kind: 'MENU', itemId: 8 })
+    expect(texts.slice(-2)).toEqual([
+      ['body', 'Dana 14:01\nhi'],
+      ['hdr', 'a · 1 new  1/2'],
+    ])
+    g.input({ kind: 'MENU', itemId: 8 })
+    expect(texts.at(-2)).toEqual(['body', 'Dana 14:01\nhello'])
+    expect(sent.filter(m => m.type === 'translate')).toHaveLength(1)
+  })
+
+  it('a failed "Translate" flashes the reason on the card and keeps the original', () => {
+    const { g, texts, page } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 8 })
+    g.onError({ code: 'translate_failed', human: "Telegram couldn't translate this right now", for: 'translate', chatId: 'a' })
+    expect(texts.at(-1)).toEqual(['hdr', "Telegram couldn't translate this right now"])
+    vi.advanceTimersByTime(3000)
+    expect(texts.at(-1)).toEqual(['hdr', 'a · 1 new  1/2'])
+    expect(page().id).toBe('card')
+    expect(texts.some(([name]) => name === 'body')).toBe(false)
+  })
+
+  it('a "Translate" with no answer gives up with a message', () => {
+    const { g, texts } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 8 })
+    vi.advanceTimersByTime(20_000)
+    expect(texts.at(-1)).toEqual(['hdr', "Couldn't translate: no answer"])
+    g.onTranslation({ chatId: 'a', items: [{ id: 7, text: 'late' }], lang: 'en' })
+    expect(texts.some(([name]) => name === 'body')).toBe(false)
+  })
+
   it('opens a breakthrough chat from the Inbox like a picked one', () => {
     const { g, sent, pages } = setup([{ ...chat('dana', 1), breakthrough: true }, chat('b', 2)])
     expect(pages.at(-1)?.list?.items[0]).toBe('+ dana · 1')

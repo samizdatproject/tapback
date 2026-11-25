@@ -27,6 +27,7 @@ const onServer: { [K in ServerMsg['type']]: (msg: Extract<ServerMsg, { type: K }
   stt: ({ type: _, ...stt }) => glasses?.onStt(stt),
   digest: msg => glasses?.onDigest(msg.channels),
   later: () => {}, // the glasses moved on already; a failure arrives as an error
+  translation: ({ type: _, ...translation }) => glasses?.onTranslation(translation),
   error: ({ type: _, ...err }) => {
     if (err.code === 'unpaired') {
       void unpair(SIGNED_OUT)

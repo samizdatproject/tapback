@@ -1,4 +1,4 @@
-"""User settings for triage: VIP senders, urgent keywords, quiet hours and breakthrough (pure, unit-tested)."""
+"""User settings for triage: VIP senders, urgent keywords, quiet hours, breakthrough and the translation language (pure, unit-tested)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ DEFAULT_KEYWORDS = ["urgent", "asap", "now", "today", "call me", "deadline", "do
 MAX_ITEMS = 30
 MAX_LEN = 40
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_LANG = re.compile(r"[a-z]{2}")  # ISO 639-1
 
 
 class SettingsError(ValueError):
@@ -24,12 +25,13 @@ class Settings:
     quiet_start: str = "22:00"
     quiet_end: str = "08:00"
     breakthrough: bool = False  # opt-in: VIP private chats and @mentions from chats that aren't picked
+    translate_to: str = "en"  # card translation target, done by Telegram's own translation
 
     def to_json(self) -> dict:
         d = asdict(self)
         return {"vip": d["vip"], "keywords": d["keywords"],
                 "quiet": {"enabled": d["quiet_enabled"], "start": d["quiet_start"], "end": d["quiet_end"]},
-                "breakthrough": d["breakthrough"]}
+                "breakthrough": d["breakthrough"], "translate_to": d["translate_to"]}
 
     @classmethod
     def from_json(cls, data: dict | None) -> "Settings":
@@ -62,10 +64,13 @@ class Settings:
         breakthrough = data.get("breakthrough", False)
         if not isinstance(breakthrough, bool):
             raise SettingsError("breakthrough must be true or false")
+        translate_to = data.get("translate_to", "en")
+        if not isinstance(translate_to, str) or not _LANG.fullmatch(translate_to):
+            raise SettingsError("Translate to needs a two-letter language code, for example en")
         return cls(vip=clean_list("vip", strip_at=True),
                    keywords=clean_list("keywords") if "keywords" in data else list(DEFAULT_KEYWORDS),
                    quiet_enabled=bool(quiet.get("enabled", False)), quiet_start=start, quiet_end=end,
-                   breakthrough=breakthrough)
+                   breakthrough=breakthrough, translate_to=translate_to)
 
 
 def keyword_pattern(keywords: list[str]) -> re.Pattern | None:

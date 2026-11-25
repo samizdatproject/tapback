@@ -21,6 +21,8 @@ class FakeTG:
         self.calls = []
         self.fail_send = False
         self.fail_unread = False
+        self.fail_translate = False
+        self.card_msgs = [7]
         self.logout_ok = True
         self.breaking = set()  # chats that break through right now (until read)
         self.marked = set()  # chats marked unread in Telegram
@@ -46,9 +48,15 @@ class FakeTG:
 
     async def card(self, chat_id):
         self.calls.append(("card", chat_id))
-        return {"type": "card", "chat": {"id": chat_id}, "msgs": [{"id": 7}], "replyTo": None,
+        return {"type": "card", "chat": {"id": chat_id}, "msgs": [{"id": i} for i in self.card_msgs], "replyTo": None,
                 "suggestions": ["Yes", "No", "Let me check", "React: thumbs up"], "newCount": 1, "earlier": 0, "readMaxId": 7,
                 "later": chat_id in self.marked}
+
+    async def translate(self, chat_id, ids, to_lang):
+        if self.fail_translate:
+            raise RuntimeError("TRANSLATE_REQ_FAILED")
+        self.calls.append(("translate", chat_id, list(ids), to_lang))
+        return {i: f"{to_lang}: message {i}" for i in ids if i != 8}  # 8 is media only
 
     async def mark_read(self, chat_id, max_id, clear_mentions=False):
         self.calls.append(("read", chat_id, max_id))
@@ -420,6 +428,73 @@ def test_later_uses_the_chat_guard_and_reports_failures(env):
     err = ws.receive_json()
     assert err["type"] == "error" and err["for"] == "later" and err["human"] == "Telegram didn't accept it. Try again."
     assert not [c for c in client.tg.calls if c[0] == "unread"]
+    ws.close()
+
+
+# --- translate (Telegram's own translation) -------------------------------------------------------
+
+def test_translate_uses_the_setting_and_only_ids_on_the_current_card(env):
+    client, store, headers, token = env
+    store.set_picked(["-1001"])
+    client.put("/settings", headers=headers, json={"translate_to": "es"})
+    client.tg.card_msgs = [7, 8, 9]
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    _until(ws, "card")
+    # 99 isn't on the card (another chat's message, say), "7" and true aren't ids, and no client text is read.
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": [9, 7, 99, "7", True, [7], 7, 8], "text": "evil"})
+    assert ws.receive_json() == {"type": "translation", "chatId": "-1001", "lang": "es",
+                                 "items": [{"id": 9, "text": "es: message 9"}, {"id": 7, "text": "es: message 7"}]}
+    assert [c for c in client.tg.calls if c[0] == "translate"] == [("translate", "-1001", [9, 7, 8], "es")]
+    ws.close()
+
+
+def test_translate_uses_the_chat_guard_and_needs_an_opened_card(env):
+    client, store, _, token = env
+    store.set_picked(["-1001", "-1002"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "translate", "chatId": "42", "ids": [7]})
+    assert ws.receive_json() == {"type": "error", "code": "not_picked", "human": "That chat isn't picked",
+                                 "for": "translate", "chatId": "42"}
+    ws.send_json({"type": "translate", "chatId": "-1002", "ids": [7]})
+    assert ws.receive_json()["code"] == "channel"
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": [7]})  # no card opened yet
+    err = ws.receive_json()
+    assert err["code"] == "nothing_to_translate" and err["for"] == "translate" and err["human"] == "No text to translate"
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    _until(ws, "card")
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": "7"})
+    assert ws.receive_json()["code"] == "nothing_to_translate"
+    assert not [c for c in client.tg.calls if c[0] == "translate"]
+    ws.close()
+
+
+def test_translate_reports_telegram_failures_and_media_only_cards(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    client.tg.card_msgs = [8]
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    _until(ws, "card")
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": [8]})  # media only: nothing came back
+    assert ws.receive_json()["human"] == "No text to translate"
+    client.tg.fail_translate = True
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": [8]})
+    assert ws.receive_json() == {"type": "error", "code": "translate_failed", "for": "translate", "chatId": "-1001",
+                                 "human": "Telegram couldn't translate this right now"}
+    ws.close()
+
+
+def test_translate_still_works_after_a_reconnect(env):
+    client, store, _, token = env
+    store.set_picked(["-1001"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    _until(ws, "card")
+    ws.close()
+    ws = _ws(client, token)  # the card is still on the glasses
+    ws.send_json({"type": "translate", "chatId": "-1001", "ids": [7]})
+    assert ws.receive_json()["items"] == [{"id": 7, "text": "en: message 7"}]
     ws.close()
 
 

@@ -5,15 +5,18 @@ import { LINE_UNITS, fitWidth, textWidth, wrapText } from './text'
 export const MENU_MUTE = 2
 export const MENU_SNOOZE = 3
 export const MENU_LATER = 7
+export const MENU_TRANSLATE = 8
 export const MUTE_MINUTES = 60
 export const SNOOZE_MINUTES = 30
 
 /** Body lines that fit between header and footer (208 px at ~28 px a line). */
 export const CARD_BODY_LINES = 7
 
-export function cardHeader(card: Card, pos: { n: number; m: number } | null): string {
+/** `translated`: the body shows Telegram's translation, said in place of the "earlier" note so it fits. */
+export function cardHeader(card: Card, pos: { n: number; m: number } | null, translated = false): string {
   let suffix = card.newCount > 0 ? ` · ${card.newCount} new` : ''
-  if (card.earlier > 0) suffix += ` · +${card.earlier} earlier on phone`
+  if (translated) suffix += ' · translated'
+  else if (card.earlier > 0) suffix += ` · +${card.earlier} earlier on phone`
   const where = pos && pos.m > 1 ? `  ${pos.n}/${pos.m}` : ''
   const title = card.chat.title.replace(/\s+/g, ' ').trim() || 'Untitled chat'
   return fitWidth(title, Math.max(8, LINE_UNITS - textWidth(suffix + where))) + suffix + where
@@ -50,6 +53,11 @@ export function cardBody(msgs: CardMsg[], budget = CARD_BODY_LINES, units = LINE
   return blocks.flat().join('\n')
 }
 
+/** The card's messages with translated text where there is some; sender and time lines stay. */
+export function translatedMsgs(msgs: CardMsg[], texts: Map<number, string>): CardMsg[] {
+  return msgs.map(m => (texts.has(m.id) ? { ...m, text: texts.get(m.id)! } : m))
+}
+
 export function cardPage(card: Card, pos: { n: number; m: number } | null): Page {
   return {
     id: 'card',
@@ -60,6 +68,7 @@ export function cardPage(card: Card, pos: { n: number; m: number } | null): Page
     ],
     menu: [
       { name: 'Later: keep unread', id: MENU_LATER },
+      { name: 'Translate', id: MENU_TRANSLATE },
       { name: 'Mute chat 1h', id: MENU_MUTE },
       { name: 'Snooze 30 min', id: MENU_SNOOZE },
     ],

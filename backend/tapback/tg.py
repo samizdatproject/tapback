@@ -21,6 +21,7 @@ from telethon.tl.functions.messages import (
     GetSponsoredMessagesRequest,
     MarkDialogUnreadRequest,
     SendReactionRequest,
+    TranslateTextRequest,
     ViewSponsoredMessageRequest,
 )
 from telethon.tl.types import (
@@ -36,9 +37,9 @@ from telethon.tl.types import (
 from telethon.tl.types.messages import SponsoredMessages
 
 from . import config, rules, session_store
-from .cards import build_card
+from .cards import build_card, cut
 from .digest import strip_emoji, top_posts
-from .media import message_text
+from .media import media_label, message_text
 from .settings import Settings, is_vip, keyword_pattern
 
 SPONSORED_CACHE_S = 300  # getSponsoredMessages: "The result must be cached for 5 minutes"
@@ -235,6 +236,24 @@ class Telegram:
         """Telegram's own "Mark as unread" (messages.markDialogUnread): the state lives in Telegram."""
         entity = await self.client.get_input_entity(int(chat_id))
         await self.client(MarkDialogUnreadRequest(peer=InputDialogPeer(entity), unread=unread))
+
+    async def translate(self, chat_id: str, ids: list[int], to_lang: str) -> dict[int, str]:
+        """Telegram's own translation (messages.translateText) of a card's messages, by id.
+
+        Telegram reads and translates the messages on its own servers, so no text goes to any other
+        service. Media-only messages are skipped; a caption is translated and keeps its media label.
+        """
+        peer = await self.client.get_input_entity(int(chat_id))
+        msgs = [m for m in await self.client.get_messages(peer, ids=ids) if m is not None and (m.message or "").strip()]
+        if not msgs:
+            return {}
+        res = await self.client(TranslateTextRequest(to_lang=to_lang, peer=peer, id=[m.id for m in msgs]))
+        out = {}
+        for msg, done in zip(msgs, res.result):
+            text = (getattr(done, "text", "") or "").strip()
+            if text:
+                out[msg.id] = cut(" ".join(p for p in (media_label(msg), text) if p))
+        return out
 
     async def mute(self, chat_id: str, minutes: int) -> None:
         entity = await self.client.get_input_entity(int(chat_id))

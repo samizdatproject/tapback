@@ -34,6 +34,8 @@ export interface Settings {
   quiet: { enabled: boolean; start: string; end: string }
   /** Let VIPs and @mentions through from chats that aren't picked (off by default). */
   breakthrough?: boolean
+  /** ISO 639-1 code (two lowercase letters) for "Translate" on a card, done by Telegram itself. Default "en". */
+  translate_to?: string
 }
 
 export interface CardMsg {
@@ -90,6 +92,12 @@ export interface DigestChannel {
   maxId: number | null
   sponsored: Sponsored | null
 }
+/** Telegram's own translation of a card's messages; messages without text are left out. */
+export interface Translation {
+  chatId: string
+  items: { id: number; text: string }[]
+  lang: string
+}
 export interface ServerError {
   code: string
   human: string
@@ -106,6 +114,7 @@ export type ServerMsg =
   | ({ type: 'stt' } & SttMsg)
   | { type: 'digest'; channels: DigestChannel[] }
   | { type: 'later'; chatId: string; ok: true }
+  | ({ type: 'translation' } & Translation)
   | ({ type: 'error' } & ServerError)
 /** Client → server. */
 export type ClientMsg =
@@ -116,6 +125,7 @@ export type ClientMsg =
   | { type: 'mute'; chatId: string; minutes: number }
   | { type: 'snooze'; chatId: string; minutes: number }
   | { type: 'later'; chatId: string }
+  | { type: 'translate'; chatId: string; ids: number[] }
   | { type: 'audio_begin'; id: string }
   | { type: 'audio_end' }
   | { type: 'audio_cancel' }
@@ -234,6 +244,14 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
     case 'later': {
       const chatId = str(msg.chatId)
       return chatId && msg.ok === true ? { type: 'later', chatId, ok: true } : null
+    }
+    case 'translation': {
+      const chatId = str(msg.chatId)
+      const items = (Array.isArray(msg.items) ? msg.items : []).flatMap(raw => {
+        const r = rec(raw)
+        return r && typeof r.id === 'number' && typeof r.text === 'string' ? [{ id: r.id, text: r.text }] : []
+      })
+      return chatId ? { type: 'translation', chatId, items, lang: str(msg.lang) } : null
     }
     case 'error': {
       const err: ServerError = { code: str(msg.code), human: str(msg.human, 'Server error') }

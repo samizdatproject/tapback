@@ -91,7 +91,9 @@ src/
   goes to the next or previous chat with unread (channels are skipped), tap opens Quick replies, and
   double-tap goes back to the Inbox. Swipes skip chats kept for later, since showing
   their card clears the mark. The glasses menu offers Later: keep unread (marks the chat
-  unread in Telegram, then opens the next chat), Mute chat 1h and Snooze 30 min.
+  unread in Telegram, then opens the next chat), Translate (Telegram's own translation into
+  the language set on the phone, drawn in place with `· translated` in the header; a
+  second Translate shows the original), Mute chat 1h and Snooze 30 min.
 - **Quick replies**: suggestions from the backend. Tap one to send it, or
   double-tap to go back to the card.
 - **Dictate**: hold (long press) on a card or Quick replies and speak; release to
@@ -113,8 +115,8 @@ src/
 ## Phone screen
 
 Pairing, the chat picker, **Triage** (VIP senders get `★`, urgent words get `!`,
-and quiet hours, during which the glasses show counts only and never move on by
-themselves), **Unpair** (forget this device's token), **Log out &
+quiet hours, during which the glasses show counts only and never move on by
+themselves, and the Translate to language), **Unpair** (forget this device's token), **Log out &
 wipe** (asks for a second tap within 5 s, then signs the server out of Telegram
 and deletes its session), and a short privacy summary. If the server revokes the
 device, the plugin returns to pairing.

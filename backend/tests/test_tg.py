@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from telethon import utils
 from telethon.tl.custom.message import Message
-from telethon.tl.functions.messages import GetPeerDialogsRequest, MarkDialogUnreadRequest
+from telethon.tl.functions.messages import GetPeerDialogsRequest, MarkDialogUnreadRequest, TranslateTextRequest
 from telethon.tl.custom.dialog import Dialog
 from telethon.tl.types import (
     Channel,
@@ -15,13 +15,16 @@ from telethon.tl.types import (
     InputDialogPeer,
     InputPeerUser,
     MessageMediaDocument,
+    MessageMediaPhoto,
     PeerChannel,
     PeerChat,
     PeerNotifySettings,
     PeerUser,
+    TextWithEntities,
     User,
 )
 from telethon.tl.types import Dialog as RawDialog
+from telethon.tl.types.messages import TranslateResult
 
 from tapback.settings import Settings
 from tapback.tg import Telegram, breaks_through, chat_row
@@ -87,6 +90,7 @@ def test_chat_row_reads_later_and_breakthrough():
 class StubClient:
     def __init__(self, entities, dialog=None):
         self.entities, self.dialog, self.requests = entities, dialog, []
+        self.translations: list[str] = []  # what Telegram's translateText answers, in request order
 
     async def get_entity(self, chat_id):
         if chat_id not in self.entities:
@@ -100,6 +104,8 @@ class StubClient:
         self.requests.append(request)
         if isinstance(request, GetPeerDialogsRequest):
             return SimpleNamespace(dialogs=[self.dialog] if self.dialog else [])
+        if isinstance(request, TranslateTextRequest):
+            return TranslateResult(result=[TextWithEntities(text=t, entities=[]) for t in self.translations])
         return True
 
 
@@ -139,3 +145,47 @@ def test_card_reports_the_later_mark_and_labels_media():
     client.get_messages = get_messages
     card = asyncio.run(tg_with(client).card("42"))
     assert card["later"] is True and card["msgs"][0]["text"] == "[voice 0:14]"
+
+
+VOICE = MessageMediaDocument(document=Document(
+    id=1, access_hash=1, file_reference=b"", date=NOW, mime_type="audio/ogg", size=10, dc_id=2,
+    attributes=[DocumentAttributeAudio(duration=14, voice=True)]))
+
+
+def history_client(messages):
+    client = StubClient({42: DANA})
+    client.fetched = []
+
+    async def get_messages(entity, ids):
+        client.fetched.append((entity, list(ids)))
+        by_id = {m.id: m for m in messages}
+        return [by_id.get(i) for i in ids]
+
+    client.get_messages = get_messages
+    return client
+
+
+def test_translate_asks_telegram_by_message_id_and_skips_media_only():
+    client = history_client([
+        Message(id=5, peer_id=PeerUser(42), date=NOW, message="Hello friend"),
+        Message(id=6, peer_id=PeerUser(42), date=NOW, message="", media=VOICE),  # nothing to translate
+        Message(id=7, peer_id=PeerUser(42), date=NOW, message="Nice view", media=MessageMediaPhoto()),
+    ])
+    client.translations = ["Hola  👋 amigo", "Bonita vista"]
+    out = asyncio.run(tg_with(client).translate("42", [5, 6, 7, 99], "es"))
+    (request,) = client.requests
+    assert isinstance(request, TranslateTextRequest) and request.to_lang == "es"
+    assert isinstance(request.peer, InputPeerUser) and request.peer.user_id == 42
+    assert request.id == [5, 7] and request.text is None  # Telegram reads the messages itself
+    assert client.fetched[0][1] == [5, 6, 7, 99]
+    assert out == {5: "Hola amigo", 7: "[photo] Bonita vista"}  # emoji stripped, caption keeps its label
+
+
+def test_translate_cuts_long_text_and_never_calls_telegram_without_text():
+    client = history_client([Message(id=5, peer_id=PeerUser(42), date=NOW, message="x")])
+    client.translations = ["word " * 100]
+    text = asyncio.run(tg_with(client).translate("42", [5], "en"))[5]
+    assert len(text) <= 280 and text.endswith("…")
+    media_only = history_client([Message(id=6, peer_id=PeerUser(42), date=NOW, message="", media=VOICE)])
+    assert asyncio.run(tg_with(media_only).translate("42", [6], "en")) == {}
+    assert media_only.requests == []

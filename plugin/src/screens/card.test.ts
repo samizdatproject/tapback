@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Card, CardMsg } from '../net'
-import { CARD_BODY_LINES, cardBody, cardHeader } from './card'
+import { CARD_BODY_LINES, cardBody, cardHeader, cardPage, translatedMsgs } from './card'
 import { LINE_UNITS, textWidth } from './text'
 
 const msg = (id: number, sender: string, text: string, mine = false): CardMsg => ({ id, sender, time: '14:01', text, mine })
@@ -78,5 +78,25 @@ describe('cardHeader', () => {
     const h = cardHeader(card({ chat: { id: '1', title: 'A very long group title that keeps going and going', kind: 'group' }, earlier: 12 }), { n: 1, m: 4 })
     expect(h.endsWith('… · 3 new · +12 earlier on phone  1/4')).toBe(true)
     expect(textWidth(h)).toBeLessThanOrEqual(LINE_UNITS)
+  })
+})
+
+describe('translation on the card', () => {
+  it('offers Translate right after Later', () => {
+    expect(cardPage(card(), null).menu?.map(m => m.name)).toEqual(['Later: keep unread', 'Translate', 'Mute chat 1h', 'Snooze 30 min'])
+  })
+
+  it('says "translated" in the header and still fits the line', () => {
+    expect(cardHeader(card(), { n: 2, m: 3 }, true)).toBe('Acme Work · 3 new · translated  2/3')
+    const h = cardHeader(card({ chat: { id: '1', title: 'A very long group title that keeps going', kind: 'group' }, newCount: 999, earlier: 999 }), { n: 10, m: 20 }, true)
+    expect(h.endsWith('… · 999 new · translated  10/20')).toBe(true)
+    expect(textWidth(h)).toBeLessThanOrEqual(LINE_UNITS)
+  })
+
+  it('swaps in translated texts and keeps sender, time and untranslated messages', () => {
+    const msgs = [msg(1, 'Dana', 'Hola'), msg(2, 'Lee', '[voice 0:14]')]
+    const out = translatedMsgs(msgs, new Map([[1, 'Hello']]))
+    expect(cardBody(out)).toBe('Dana 14:01\nHello\nLee 14:01\n[voice 0:14]')
+    expect(msgs[0].text).toBe('Hola')
   })
 })

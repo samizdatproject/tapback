@@ -64,3 +64,14 @@ def test_vip_matches_name_or_username():
 def test_quiet_hours(start, end, now, expected):
     assert in_quiet_hours(Settings(quiet_enabled=True, quiet_start=start, quiet_end=end), now) is expected
     assert in_quiet_hours(Settings(quiet_enabled=False, quiet_start=start, quiet_end=end), now) is False
+
+
+def test_translate_to_defaults_to_english_and_is_two_lowercase_letters():
+    assert Settings().translate_to == "en"
+    assert Settings.from_json({}).translate_to == "en"  # settings saved before translation existed
+    s = Settings.from_json({"translate_to": "fa"})
+    assert s.translate_to == "fa" and s.to_json()["translate_to"] == "fa"
+    assert Settings.from_json(s.to_json()) == s
+    for bad in ("EN", "eng", "e", "", "en\n", "e1", 12, None):
+        with pytest.raises(SettingsError):
+            Settings.from_json({"translate_to": bad})

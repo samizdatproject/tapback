@@ -1,13 +1,13 @@
 import type { Settings } from '../net'
 import { el, message } from './dom'
-import { DEFAULT_KEYWORDS, addItem, removeItem, settingsBody } from './settings'
+import { DEFAULT_KEYWORDS, TRANSLATE_LANGS, addItem, cleanLang, removeItem, settingsBody } from './settings'
 
 export interface TriageActions {
   loadSettings(): Promise<Settings>
   saveSettings(settings: Settings): Promise<Settings>
 }
 
-/** "Triage" card: VIP senders, urgent words, quiet hours, breakthrough. */
+/** "Triage" card: VIP senders, urgent words, quiet hours, breakthrough, translation language. */
 export function triageSection(actions: TriageActions): { element: HTMLElement; load(): Promise<void> } {
   let model: Settings | null = null
 
@@ -140,6 +140,34 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
     ),
   )
 
+  const OTHER = 'other'
+  const langSelect = el(
+    'select',
+    { id: 'translate-to' },
+    ...TRANSLATE_LANGS.map(l => el('option', { value: l.code }, `${l.name} (${l.code})`)),
+    el('option', { value: OTHER }, 'Other (code)'),
+  )
+  const langOther = el('input', { type: 'text', maxLength: 2, placeholder: 'it', autocomplete: 'off', spellcheck: false })
+  langOther.setAttribute('aria-label', 'Language code (two letters)')
+  const syncLang = () => {
+    langOther.hidden = langSelect.value !== OTHER
+    if (model) model = { ...model, translate_to: langSelect.value === OTHER ? cleanLang(langOther.value) : langSelect.value }
+  }
+  langSelect.addEventListener('change', syncLang)
+  langOther.addEventListener('input', syncLang)
+  const translate = el(
+    'div',
+    { className: 'field' },
+    el('h3', {}, 'Translate'),
+    el(
+      'p',
+      { className: 'hint' },
+      '"Translate" in the card menu asks Telegram to translate the messages. No text goes to any other service.',
+    ),
+    el('label', { htmlFor: 'translate-to' }, "Translate to (uses Telegram's own translation)"),
+    el('div', { className: 'add' }, langSelect, langOther),
+  )
+
   const save = el('button', { type: 'button', className: 'primary' }, 'Save')
   const body = el(
     'div',
@@ -148,6 +176,7 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
     words.block,
     quiet,
     breakthrough,
+    translate,
     error,
     saved,
     el('div', { className: 'row' }, save),
@@ -163,7 +192,18 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
   )
 
   function show(s: Settings) {
-    model = { vip: [...s.vip], keywords: [...s.keywords], quiet: { ...s.quiet }, breakthrough: s.breakthrough === true }
+    const lang = s.translate_to ?? 'en'
+    model = {
+      vip: [...s.vip],
+      keywords: [...s.keywords],
+      quiet: { ...s.quiet },
+      breakthrough: s.breakthrough === true,
+      translate_to: lang,
+    }
+    const listed = TRANSLATE_LANGS.some(l => l.code === lang)
+    langSelect.value = listed ? lang : OTHER
+    langOther.value = listed ? '' : lang
+    langOther.hidden = listed
     quietOn.checked = s.quiet.enabled
     breakthroughOn.checked = s.breakthrough === true
     start.value = s.quiet.start
@@ -177,6 +217,7 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
   save.addEventListener('click', async () => {
     if (!model) return
     syncQuiet()
+    syncLang()
     const { body: payload, error: err } = settingsBody(model)
     showError(err)
     if (!payload) return

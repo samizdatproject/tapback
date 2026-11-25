@@ -45,6 +45,7 @@ class Telegram(Protocol):
     async def send(self, chat_id: str, reply_to: int | None, text: str | None, reaction: str | None) -> None: ...
     async def mute(self, chat_id: str, minutes: int) -> None: ...
     async def mark_unread(self, chat_id: str, unread: bool) -> None: ...
+    async def translate(self, chat_id: str, ids: list[int], to_lang: str) -> dict[int, str]: ...
     async def breakthrough(self, chat_id: str, prefs: Settings) -> bool: ...
     async def digest(self, channel_ids: list[str]) -> list[dict]: ...
     async def mark_read(self, chat_id: str, max_id: int, clear_mentions: bool = False) -> None: ...
@@ -70,6 +71,9 @@ class Hub:
         self.sends: deque[float] = deque()  # across all devices and reconnects
         self.results: dict[str, tuple[float, asyncio.Future]] = {}
         self.granted: dict[str, float] = {}  # breakthrough chat id -> when the server last confirmed it
+        # chat id -> message ids on the card the server last sent for it (ids only, never text).
+        # Kept here, not per connection, because the card stays on the glasses across a reconnect.
+        self.card_ids: dict[str, set[int]] = {}
 
     async def inbox(self) -> dict:
         hidden = self.store.hidden()
@@ -178,6 +182,7 @@ class Session:
                 if card.pop("later", False):
                     self.unmark.add(cid)
                 card["suggestions"] = rules.order_by_counts(card["suggestions"], self.hub.store.reply_counts(cid))
+                self.hub.card_ids[cid] = {m["id"] for m in card["msgs"]}
                 await self.reply(card)
         elif kind == "card_shown":
             # Telegram API terms 1.4 (no ghost mode): what the glasses actually displayed is marked read,
@@ -196,6 +201,8 @@ class Session:
             await self.hub.broadcast()
         elif kind == "later":
             await self.later(msg)
+        elif kind == "translate":
+            await self.translate(msg)
         elif kind == "send":
             await self.send(msg)
         elif kind == "digest_open":
@@ -254,6 +261,29 @@ class Session:
         log.info("marked a chat unread for later")
         await self.reply({"type": "later", "chatId": cid, "ok": True})
         await self.hub.broadcast()
+
+    async def translate(self, msg: dict) -> None:
+        """Telegram's own translation of the chat's current card. Only ids the server put on that
+        card are translated; Telegram re-reads the messages itself, so no client text is trusted."""
+        cid = await self._chat(msg.get("chatId"))
+        if cid is None:
+            return
+        on_card = self.hub.card_ids.get(cid, set())
+        raw = msg.get("ids") if isinstance(msg.get("ids"), list) else []
+        ids = list(dict.fromkeys(i for i in raw if type(i) is int and i in on_card))
+        lang = self.hub.store.settings().translate_to
+        try:
+            texts = await self.hub.tg.translate(cid, ids, lang) if ids else {}
+        except Exception as exc:  # TRANSLATE_REQ_FAILED, a flood wait, a language Telegram doesn't offer...
+            log.warning("translate failed: %s", type(exc).__name__)  # never log the text
+            await self.reply({"type": "error", "code": "translate_failed", "human": "Telegram couldn't translate this right now"})
+            return
+        if not texts:
+            await self.reply({"type": "error", "code": "nothing_to_translate", "human": "No text to translate"})
+            return
+        log.info("translated %d message(s) with Telegram", len(texts))
+        items = [{"id": i, "text": texts[i]} for i in ids if i in texts]
+        await self.reply({"type": "translation", "chatId": cid, "items": items, "lang": lang})
 
     async def _transcribe(self, dictation: str, pcm: bytes) -> None:
         try:

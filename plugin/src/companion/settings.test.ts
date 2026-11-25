@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_KEYWORDS, MAX_ITEMS, addItem, cleanItem, removeItem, settingsBody } from './settings'
+import { DEFAULT_KEYWORDS, MAX_ITEMS, TRANSLATE_LANGS, addItem, cleanItem, cleanLang, removeItem, settingsBody } from './settings'
 
 describe('triage settings model', () => {
   it('cleans like the server: lowercase, single spaces, no leading @ for VIPs', () => {
@@ -33,6 +33,19 @@ describe('triage settings model', () => {
     const s = { vip: [], keywords: [], quiet: { enabled: false, start: '22:00', end: '08:00' }, breakthrough: true }
     expect(settingsBody(s).body?.breakthrough).toBe(true)
     expect(settingsBody({ ...s, breakthrough: false }).body?.breakthrough).toBe(false)
+  })
+
+  it('keeps the translation language in the PUT body and checks it like the server', () => {
+    const s = { vip: [], keywords: [], quiet: { enabled: false, start: '22:00', end: '08:00' }, translate_to: 'fa' }
+    expect(settingsBody(s).body?.translate_to).toBe('fa')
+    expect(settingsBody({ ...s, translate_to: cleanLang(' IT ') }).body?.translate_to).toBe('it')
+    for (const bad of ['', 'e', 'eng', 'EN', 'e1']) {
+      expect(settingsBody({ ...s, translate_to: bad })).toEqual({
+        body: null,
+        error: 'Translate to needs a two-letter language code, for example en.',
+      })
+    }
+    expect(TRANSLATE_LANGS.map(l => l.code)).toEqual(['en', 'es', 'fa', 'ru', 'ar', 'tr', 'de', 'fr', 'zh', 'pt', 'uk', 'hi'])
   })
 
   it('builds the PUT body, or explains a missing time', () => {

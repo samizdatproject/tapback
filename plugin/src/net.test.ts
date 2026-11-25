@@ -44,6 +44,19 @@ describe('parseServerMsg', () => {
     ])
   })
 
+  it('parses a translation and drops malformed items', () => {
+    const msg = parseServerMsg(
+      JSON.stringify({
+        type: 'translation',
+        chatId: 42,
+        lang: 'es',
+        items: [{ id: 7, text: 'Hola' }, { id: '8', text: 'x' }, { id: 9 }, null],
+      }),
+    )
+    expect(msg).toEqual({ type: 'translation', chatId: '42', lang: 'es', items: [{ id: 7, text: 'Hola' }] })
+    expect(parseServerMsg(JSON.stringify({ type: 'translation', items: [] }))).toBeNull()
+  })
+
   it('parses the result of "later"', () => {
     expect(parseServerMsg(JSON.stringify({ type: 'later', chatId: 42, ok: true }))).toEqual({
       type: 'later',

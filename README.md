@@ -26,6 +26,8 @@ Real screens from the Even Hub simulator (576×288), running against a real Tele
 | **Digest.** The top 3 posts per channel by views, reactions and forwards, first line verbatim. Each channel's sponsored message follows on its own page. | **Breakthrough (opt-in).** Dana isn't a picked chat, but she's a VIP, so her message gets through with `+`. @mentions in groups work the same way. |
 | ![Later: kept unread](docs/screens/9-later.png) | ![Media labels](docs/screens/10-media.png) |
 | **Later.** Glanced but can't answer? "Later: keep unread" marks the chat unread in Telegram, so it still looks unread on your phone. | **Media.** Voice notes, photos, files, polls and locations say what they are: `[voice 0:14]`, `[photo] caption`, `[file: Q4-report.pdf]`. |
+| ![Translate, by Telegram](docs/screens/11-translate.png) | |
+| **Translate.** Telegram's own translation, from the card menu. The header says `· translated`; a second Translate shows the original. | |
 
 ## How it works
 
@@ -43,6 +45,7 @@ G2 glasses ──BLE── Even Realities app (WebView: TapBack plugin, Vite + T
 - **Glance, tap, tap.** A new message from a picked chat shows as a card. Opening it marks it read, as Telegram's rules require (no "ghost mode"). One tap opens reply suggestions; a second tap sends after a 2-second undo window.
 - **Later.** Glanced but can't answer now? "Later" in the card menu marks the chat unread with Telegram's own "Mark as unread", so it also looks unread on your phone, and the next chat opens (during quiet hours, the inbox). Later chats are listed after unread ones. A picked chat you mark unread on the phone shows as later on the glasses, and opening its card clears the mark. TapBack stores nothing for this; the mark lives in Telegram.
 - **Media.** Voice notes, videos, photos and files show as short labels: `[voice 0:14]`, `[video message 0:09]`, `[photo]` plus the caption, `[file: name.pdf]`, `[poll: question]`. Voice notes are not transcribed.
+- **Translate.** "Translate" in the card menu shows the card again in your language (set on the phone, English by default), with `· translated` in the header. Telegram's own translation does it: the backend sends Telegram only the message ids, and Telegram translates them on its own servers. A second "Translate" shows the original.
 - **Hold to talk.** Dictation goes to whisper.cpp on your own machine. You see the transcript and confirm before anything is sent.
 - **Digest.** The top 3 new posts per picked channel, ranked by views, reactions and forwards, shown verbatim. Telegram's sponsored messages are shown where Telegram returns them.
 - **Your rules.** VIP senders get `★`, your urgent words get `!`, and both come first. Quiet hours turn the glasses into counts only. Reply suggestions you pick most in a chat move to the top there (only counts of your own choices are kept, never message text). Breakthrough (off by default) lets two kinds of chat you didn't pick through while they have unread messages: a private chat with one of your VIPs, and a group that @mentions you. They get `+` and can be opened and answered like picked chats. Channels never come through, and your mutes and snoozes still apply.
@@ -51,18 +54,24 @@ G2 glasses ──BLE── Even Realities app (WebView: TapBack plugin, Vite + T
 
 **Users.** People whose work runs through a few Telegram chats inside a big, noisy account: crypto traders and fund teams, founders, community and support managers, on-call engineers. Telegram is where much of crypto and a large part of the tech world coordinates, and these users already pay for tools that save them attention.
 
-**Why they'd switch from the phone.** The phone shows everything; TapBack shows only what they picked (plus, if they opt in, VIPs and @mentions), and a reply takes two taps without looking down. No AI touches their messages, which matters to exactly these users (deal flow, trading, ops).
+**Why they'd switch from the phone.** The phone shows everything; TapBack shows only what they picked (plus, if they opt in, VIPs and @mentions), and a reply takes two taps without looking down. No outside AI touches their messages (translation is Telegram's own), which matters to exactly these users (deal flow, trading, ops).
 
 **Path to launch on Even Hub.**
 1. **Now:** an Even Hub plugin plus a one-command self-hosted backend (`scripts/run-local.sh`), for technical users and teams who run their own servers.
 2. **Next:** an optional hosted backend, one isolated instance per user (their own encrypted session, no shared message store), as a paid subscription for people who won't self-host. The plugin stays free.
 3. **Then:** Slack and Discord through the same card and reply engine (both are in the same track's app list), so one glanceable inbox covers a person's work chats.
 
-**Why it can ship.** It follows Telegram's API terms by design (own api_id, "unofficial" naming, read receipts honoured, sponsored messages shown, no AI on Telegram data), so it can be listed without depending on rules being loosened later.
+**Why it can ship.** It follows Telegram's API terms by design (own api_id, "unofficial" naming, read receipts honoured, sponsored messages shown, no outside AI on Telegram data), so it can be listed without depending on rules being loosened later.
+
+### Optional AI, Telegram's way
+
+- **Now:** translation runs on Telegram's own servers, so no message text reaches any outside AI.
+- **Planned, opt-in and part of the hosted plan:** AI only on your own words, for example cleaning up a dictated reply before you confirm it.
+- **Only when Telegram's terms allow it:** AI on other people's messages, such as smart replies or summaries. Today the terms require consent from everyone in the chat, so TapBack doesn't do it.
 
 ## Privacy and Telegram's terms
 
-- **No Telegram data goes to any AI service.** Reply suggestions come from published regex rules ([`backend/tapback/rules.py`](backend/tapback/rules.py)); the digest ranks by metadata and shows each post's own first line. Voice notes show as `[voice 0:14]` and are never transcribed; only your own dictated replies go to speech-to-text.
+- **No Telegram data goes to any AI service.** Reply suggestions come from published regex rules ([`backend/tapback/rules.py`](backend/tapback/rules.py)); the digest ranks by metadata and shows each post's own first line. Voice notes show as `[voice 0:14]` and are never transcribed; only your own dictated replies go to speech-to-text. Translate uses Telegram's own translation, which is Telegram's service: Telegram translates on its own servers, and no text goes to any other service.
 - **Self-hosted.** The backend runs on your machine. The Telegram session is stored only encrypted (AES-256-GCM), with the key in a separate file.
 - **No message storage.** Message text stays in memory; the database holds only picked chat ids, hashed device tokens and mute timers. Logs never contain message text.
 - **Read receipts honoured, every send undoable.** Replies go only to chats you picked, or to a chat that came through by breakthrough, at most 10 a minute. The server checks breakthrough on Telegram itself and never takes the glasses' word for it.

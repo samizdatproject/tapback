@@ -1,7 +1,18 @@
 import type { Input } from '../bridge'
-import type { Card, ClientMsg, DigestChannel, Inbox, InboxChat, SentMsg, ServerError, SttMsg } from '../net'
+import type { Card, ClientMsg, DigestChannel, Inbox, InboxChat, SentMsg, ServerError, SttMsg, Translation } from '../net'
 import type { State } from '../state'
-import { MENU_LATER, MENU_MUTE, MENU_SNOOZE, MUTE_MINUTES, SNOOZE_MINUTES, cardHeader, cardPage } from './card'
+import {
+  MENU_LATER,
+  MENU_MUTE,
+  MENU_SNOOZE,
+  MENU_TRANSLATE,
+  MUTE_MINUTES,
+  SNOOZE_MINUTES,
+  cardBody,
+  cardHeader,
+  cardPage,
+  translatedMsgs,
+} from './card'
 import { Dictation, dictatePage, dictateTarget, dictateText, type DictPhase } from './dictate'
 import {
   MENU_BACK_TO_INBOX,
@@ -25,13 +36,14 @@ import { SendFlow, sendingPage, sendingText, type SendPhase, type SendingContext
 
 const OPEN_TIMEOUT_MS = 8000
 const DIGEST_TIMEOUT_MS = 30_000 // the server fetches every channel
+const TRANSLATE_TIMEOUT_MS = 20_000 // the server sleeps through flood waits of up to 15 s
 const CLICK_AFTER_DOUBLE_MS = 300 // a double-tap can trail a stray single tap
 const RESULT_MS = 1000 // how long "Sent ●" / "Not sent" stay up
 
 type View =
   | { name: 'intro' }
   | { name: 'inbox' }
-  | { name: 'card'; card: Card }
+  | { name: 'card'; card: Card; translated: boolean }
   | { name: 'replies'; card: Card; replies: Reply[] }
   | { name: 'sending'; card: Card; flow: SendFlow; ctx: SendingContext }
   | {
@@ -75,6 +87,8 @@ export class Glasses {
 
   private digestFocus = '' // channel whose page the next digest opens at
   private shownCards = new WeakSet<Card>() // cards already reported with card_shown
+  private translations = new WeakMap<Card, Map<number, string>>() // Telegram's translation, by message id
+  private translating: { card: Card; timer: ReturnType<typeof setTimeout> } | null = null
   private viewedAds = new Set<string>() // sponsored randomIds already reported, across digest loads
   private lastDoubleAt = -Infinity
   private delay: ReturnType<typeof setTimeout> | null = null
@@ -184,6 +198,7 @@ export class Glasses {
           this.send({ type: mute ? 'mute' : 'snooze', chatId, minutes: mute ? MUTE_MINUTES : SNOOZE_MINUTES })
           this.step(chatId, 1)
         } else if (input.kind === 'MENU' && input.itemId === MENU_LATER) this.keepForLater(view.card)
+        else if (input.kind === 'MENU' && input.itemId === MENU_TRANSLATE) this.toggleTranslation(view)
         break
       case 'replies':
         if (input.kind === 'DOUBLE') this.showCard(view.card)
@@ -260,6 +275,14 @@ export class Glasses {
     this.showCard(card)
   }
 
+  onTranslation(t: Translation): void {
+    const asked = this.translating
+    if (!asked || asked.card.chat.id !== t.chatId) return
+    this.clearTranslating()
+    this.translations.set(asked.card, new Map(t.items.map(i => [i.id, i.text])))
+    if (this.view.name === 'card' && this.view.card === asked.card) this.drawCard(this.view, true)
+  }
+
   onSent(msg: SentMsg): void {
     if (this.view.name === 'sending') this.view.flow.ack(msg)
   }
@@ -276,6 +299,9 @@ export class Glasses {
       this.view.dict.fail(err.human)
     } else if ((err.for === 'mute' || err.for === 'snooze' || err.for === 'later') && !p) {
       this.flash(`Couldn't ${err.for === 'later' ? 'keep it for later' : err.for}: ${err.human}`)
+    } else if (err.for === 'translate' && this.translating) {
+      this.clearTranslating()
+      this.flash(err.human) // "Telegram couldn't translate this right now" says it already
     }
   }
 
@@ -343,9 +369,40 @@ export class Glasses {
     this.later(() => (quiet ? this.toInbox() : this.step(chatId, 1)))
   }
 
+  /**
+   * Telegram's own translation (the server asks Telegram, into the language set on the phone),
+   * drawn in place of the original texts. A second "Translate" shows the original again.
+   */
+  private toggleTranslation(view: Extract<View, { name: 'card' }>): void {
+    if (view.translated || this.translations.has(view.card)) {
+      this.drawCard(view, !view.translated)
+      return
+    }
+    if (this.translating) return // already asked
+    const { card } = view
+    if (!this.send({ type: 'translate', chatId: card.chat.id, ids: card.msgs.map(m => m.id) })) {
+      this.flash('Offline · try again in a moment')
+      return
+    }
+    const timer = setTimeout(() => {
+      this.translating = null
+      this.flash("Couldn't translate: no answer")
+    }, TRANSLATE_TIMEOUT_MS)
+    this.translating = { card, timer }
+    this.status('Translating…')
+  }
+
+  /** Redraws the card's body and header, translated or original, without rebuilding the page. */
+  private drawCard(view: Extract<View, { name: 'card' }>, translated: boolean): void {
+    const texts = translated ? this.translations.get(view.card) : undefined
+    view.translated = texts !== undefined
+    this.screens.setText('body', cardBody(texts ? translatedMsgs(view.card.msgs, texts) : view.card.msgs))
+    this.status(null)
+  }
+
   private showCard(card: Card): void {
     this.leave()
-    const view: View = { name: 'card', card }
+    const view: View = { name: 'card', card, translated: false }
     this.view = view
     void this.screens.show(cardPage(card, position(this.order, this.chats, card.chat.id))).then(drawn => {
       // The server marks the chat read only now that the card was really seen, once.
@@ -480,7 +537,10 @@ export class Glasses {
         this.screens.setText('hdr', text ?? inboxHeader(this.state?.inbox ?? null))
         break
       case 'card':
-        this.screens.setText('hdr', text ?? cardHeader(view.card, position(this.order, this.chats, view.card.chat.id)))
+        this.screens.setText(
+          'hdr',
+          text ?? cardHeader(view.card, position(this.order, this.chats, view.card.chat.id), view.translated),
+        )
         break
       case 'replies':
         this.screens.setText('hdr', text ?? repliesHeader(view.card))
@@ -511,6 +571,11 @@ export class Glasses {
     }, ms)
   }
 
+  private clearTranslating(): void {
+    if (this.translating) clearTimeout(this.translating.timer)
+    this.translating = null
+  }
+
   private clearPending(): void {
     if (this.pending) clearTimeout(this.pending.timer)
     this.pending = null
@@ -521,6 +586,7 @@ export class Glasses {
     if (this.delay) clearTimeout(this.delay)
     this.delay = null
     this.clearPending()
+    this.clearTranslating()
     if (this.view.name === 'sending') this.view.flow.dispose()
     if (this.view.name === 'dictate') this.view.dict.dispose() // the mic never outlives its page
   }
