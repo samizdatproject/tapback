@@ -22,8 +22,10 @@ Real screens from the Even Hub simulator (576×288), running against a real Tele
 | **Quick replies.** "Where are you?" gets "On my way"; a meeting time gets "Works for me". Rules, not AI. | **Undo.** Every send waits 2 seconds. Double-tap, or opening the menu, cancels it. |
 | ![Sent, then the next chat](docs/screens/5-sent.png) | ![Dictated reply, transcribed locally](docs/screens/6-dictation.png) |
 | **Sent.** Then the next chat with unread messages opens. | **Hold to talk.** Transcribed by whisper.cpp on your own machine. You confirm before it sends. |
-| ![Digest: top posts by engagement](docs/screens/7-digest.png) | |
-| **Digest.** The top 3 posts per channel by views, reactions and forwards, first line verbatim. Each channel's sponsored message follows on its own page. | |
+| ![Digest: top posts by engagement](docs/screens/7-digest.png) | ![Breakthrough: a VIP who isn't picked](docs/screens/8-breakthrough.png) |
+| **Digest.** The top 3 posts per channel by views, reactions and forwards, first line verbatim. Each channel's sponsored message follows on its own page. | **Breakthrough (opt-in).** Dana isn't a picked chat, but she's a VIP, so her message gets through with `+`. @mentions in groups work the same way. |
+| ![Later: kept unread](docs/screens/9-later.png) | ![Media labels](docs/screens/10-media.png) |
+| **Later.** Glanced but can't answer? "Later: keep unread" marks the chat unread in Telegram, so it still looks unread on your phone. | **Media.** Voice notes, photos, files, polls and locations say what they are: `[voice 0:14]`, `[photo] caption`, `[file: Q4-report.pdf]`. |
 
 ## How it works
 
