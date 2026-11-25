@@ -27,6 +27,16 @@ def test_from_json_cleans_and_validates():
         Settings.from_json({"keywords": "outage"})
 
 
+def test_breakthrough_is_opt_in_and_validated():
+    assert Settings().breakthrough is False
+    assert Settings.from_json({}).breakthrough is False
+    s = Settings.from_json({"breakthrough": True})
+    assert s.breakthrough is True and s.to_json()["breakthrough"] is True
+    assert Settings.from_json(s.to_json()) == s
+    with pytest.raises(SettingsError):
+        Settings.from_json({"breakthrough": "yes"})
+
+
 def test_keyword_pattern_matches_word_starts():
     p = keyword_pattern(["down", "liquidat*", "call me"])
     assert p.search("prod is down")

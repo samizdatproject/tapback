@@ -8,6 +8,7 @@ import {
   fit,
   footerText,
   headerText,
+  inboxHeader,
   inboxRow,
   inboxRows,
   planInbox,
@@ -60,6 +61,23 @@ describe('inbox rows', () => {
     expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
   })
 
+  it('marks breakthrough chats with an ASCII "+" before any flag', () => {
+    expect(inboxRow({ ...chat('Dana', 1), breakthrough: true })).toBe('+ Dana · 1')
+    expect(inboxRow({ ...chat('Ops', 3), flag: '!', breakthrough: true })).toBe('+! Ops · 3')
+    const row = inboxRow({ ...chat('Рабочая группа по проекту и всё такое прочее ещё', 12), flag: '★', breakthrough: true })
+    expect(row.startsWith('+★ ')).toBe(true)
+    expect(bytes(row)).toBeLessThanOrEqual(ROW_MAX_BYTES)
+    expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
+  })
+
+  it('marks chats kept for later, and keeps the mark when the title is cut', () => {
+    expect(inboxRow({ ...chat('Alice'), later: true })).toBe('Alice · later')
+    expect(inboxRow({ ...chat('Alice', 2), later: true })).toBe('Alice · 2 · later')
+    const row = inboxRow({ ...chat('A very long group title that keeps going and going and going', 0), later: true })
+    expect(row.endsWith('… · later')).toBe(true)
+    expect(Array.from(row).length).toBeLessThanOrEqual(ROW_MAX_CHARS)
+  })
+
   it('caps big counts and the number of rows', () => {
     expect(inboxRow(chat('Busy', 12345))).toBe('Busy · 999+')
     expect(inboxRows(Array.from({ length: 30 }, (_, i) => chat(`c${i}`)))).toHaveLength(LIST_MAX_ITEMS)
@@ -72,6 +90,14 @@ describe('header and footer', () => {
     expect(headerText({ unread: 1, chats: 1 })).toBe('TapBack · 1 new in 1 chat')
     expect(headerText({ unread: 0, chats: 0 })).toBe('TapBack · all caught up')
     expect(headerText(null)).toBe('TapBack')
+  })
+
+  it('counts chats kept for later instead of saying all caught up', () => {
+    expect(headerText({ unread: 0, chats: 0 }, undefined, 2)).toBe('TapBack · 2 for later')
+    expect(headerText({ unread: 3, chats: 2 }, undefined, 1)).toBe('TapBack · 3 new in 2 chats · 1 later')
+    const inbox = { chats: [{ ...chat('A'), later: true as const }, chat('B')], totals: { unread: 0, chats: 0 } }
+    expect(inboxHeader(inbox)).toBe('TapBack · 1 for later')
+    expect(inboxHeader(null)).toBe('TapBack')
   })
 
   it('says when quiet hours are on', () => {

@@ -4,7 +4,7 @@
 
 **Telegram triage for Even G2 smart glasses. An unofficial Telegram client that uses the Telegram API.**
 
-TapBack shows only the Telegram chats you pick, one card at a time, on the G2 display. You answer with two taps from rule-based reply suggestions, or hold to dictate a reply. A 30-second digest shows the top posts of the channels you follow.
+TapBack shows the Telegram chats you pick, one card at a time, on the G2 display. If you turn it on, a VIP or an @mention from a chat you didn't pick can come through too. You answer with two taps from rule-based reply suggestions, or hold to dictate a reply. A 30-second digest shows the top posts of the channels you follow.
 
 Built for the [Heads Up: Even Realities hackathon](https://dorahacks.io/hackathon/even-realities/detail) (Nov 23–29, 2026), track 01 · Messaging & News.
 
@@ -17,7 +17,7 @@ Real screens from the Even Hub simulator (576×288), running against a real Tele
 | | |
 |---|---|
 | ![Inbox: only picked chats, urgent ones first](docs/screens/1-inbox.png) | ![Card: the newest messages of one chat](docs/screens/2-card.png) |
-| **Inbox.** Only the chats you picked. `!` marks a mention or an urgent word, and those come first. | **Card.** The newest 1–3 messages. Shown means read, as Telegram's rules require. |
+| **Inbox.** The chats you picked. `!` marks a mention or an urgent word, and those come first. `+` marks a chat you didn't pick that came through (opt-in); `· later` marks a chat kept unread for later. | **Card.** The newest 1–3 messages. Shown means read, as Telegram's rules require. Media shows as a label, such as `[voice 0:14]` or `[photo]` followed by the caption. |
 | ![Quick replies from published rules](docs/screens/3-replies.png) | ![Two-second undo before sending](docs/screens/4-undo.png) |
 | **Quick replies.** "Where are you?" gets "On my way"; a meeting time gets "Works for me". Rules, not AI. | **Undo.** Every send waits 2 seconds. Double-tap, or opening the menu, cancels it. |
 | ![Sent, then the next chat](docs/screens/5-sent.png) | ![Dictated reply, transcribed locally](docs/screens/6-dictation.png) |
@@ -32,22 +32,24 @@ G2 glasses ──BLE── Even Realities app (WebView: TapBack plugin, Vite + T
                         │  HTTP + WebSocket to your own backend (pairing code, device token)
                         ▼
                TapBack backend (Python: FastAPI + Telethon), on your own machine
-                 ├─ Telegram user client (your own api_id): picked chats only
+                 ├─ Telegram user client (your own api_id): picked chats, plus opt-in breakthrough
                  ├─ deterministic reply rules and digest ranking (no AI on Telegram data)
                  └─ whisper.cpp server on the same machine for dictation
 ```
 
-- **Pick what matters.** On the phone screen you tick the chats and channels that matter. Nothing else ever reaches the glasses. Archived chats are never offered.
+- **Pick what matters.** On the phone screen you tick the chats and channels that matter. Nothing else reaches the glasses unless you turn on breakthrough (see "Your rules"). Archived chats are never offered or shown.
 - **Glance, tap, tap.** A new message from a picked chat shows as a card. Opening it marks it read, as Telegram's rules require (no "ghost mode"). One tap opens reply suggestions; a second tap sends after a 2-second undo window.
+- **Later.** Glanced but can't answer now? "Later" in the card menu marks the chat unread with Telegram's own "Mark as unread", so it also looks unread on your phone, and the next chat opens (during quiet hours, the inbox). Later chats are listed after unread ones. A picked chat you mark unread on the phone shows as later on the glasses, and opening its card clears the mark. TapBack stores nothing for this; the mark lives in Telegram.
+- **Media.** Voice notes, videos, photos and files show as short labels: `[voice 0:14]`, `[video message 0:09]`, `[photo]` plus the caption, `[file: name.pdf]`, `[poll: question]`. Voice notes are not transcribed.
 - **Hold to talk.** Dictation goes to whisper.cpp on your own machine. You see the transcript and confirm before anything is sent.
 - **Digest.** The top 3 new posts per picked channel, ranked by views, reactions and forwards, shown verbatim. Telegram's sponsored messages are shown where Telegram returns them.
-- **Your rules.** VIP senders get `★`, your urgent words get `!`, and both come first. Quiet hours turn the glasses into counts only. Reply suggestions you pick most in a chat move to the top there (only counts of your own choices are kept, never message text).
+- **Your rules.** VIP senders get `★`, your urgent words get `!`, and both come first. Quiet hours turn the glasses into counts only. Reply suggestions you pick most in a chat move to the top there (only counts of your own choices are kept, never message text). Breakthrough (off by default) lets two kinds of chat you didn't pick through while they have unread messages: a private chat with one of your VIPs, and a group that @mentions you. They get `+` and can be opened and answered like picked chats. Channels never come through, and your mutes and snoozes still apply.
 
 ## Who it's for, and the path to launch
 
 **Users.** People whose work runs through a few Telegram chats inside a big, noisy account: crypto traders and fund teams, founders, community and support managers, on-call engineers. Telegram is where much of crypto and a large part of the tech world coordinates, and these users already pay for tools that save them attention.
 
-**Why they'd switch from the phone.** The phone shows everything; TapBack shows only what they picked, and a reply takes two taps without looking down. No AI touches their messages, which matters to exactly these users (deal flow, trading, ops).
+**Why they'd switch from the phone.** The phone shows everything; TapBack shows only what they picked (plus, if they opt in, VIPs and @mentions), and a reply takes two taps without looking down. No AI touches their messages, which matters to exactly these users (deal flow, trading, ops).
 
 **Path to launch on Even Hub.**
 1. **Now:** an Even Hub plugin plus a one-command self-hosted backend (`scripts/run-local.sh`), for technical users and teams who run their own servers.
@@ -58,10 +60,10 @@ G2 glasses ──BLE── Even Realities app (WebView: TapBack plugin, Vite + T
 
 ## Privacy and Telegram's terms
 
-- **No Telegram data goes to any AI service.** Reply suggestions come from published regex rules ([`backend/tapback/rules.py`](backend/tapback/rules.py)); the digest ranks by metadata and shows each post's own first line.
+- **No Telegram data goes to any AI service.** Reply suggestions come from published regex rules ([`backend/tapback/rules.py`](backend/tapback/rules.py)); the digest ranks by metadata and shows each post's own first line. Voice notes show as `[voice 0:14]` and are never transcribed; only your own dictated replies go to speech-to-text.
 - **Self-hosted.** The backend runs on your machine. The Telegram session is stored only encrypted (AES-256-GCM), with the key in a separate file.
 - **No message storage.** Message text stays in memory; the database holds only picked chat ids, hashed device tokens and mute timers. Logs never contain message text.
-- **Read receipts honoured, every send undoable.** Replies go only to chats you picked, at most 10 a minute.
+- **Read receipts honoured, every send undoable.** Replies go only to chats you picked, or to a chat that came through by breakthrough, at most 10 a minute. The server checks breakthrough on Telegram itself and never takes the glasses' word for it.
 - **Sponsored messages** are fetched as Telegram requires, cached for 5 minutes and reported as viewed only when shown. The glasses can't open links, so the button label is shown as plain text.
 - TapBack is not affiliated with Telegram. It uses its own api_id, as Telegram's API terms require.
 

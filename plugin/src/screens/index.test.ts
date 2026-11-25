@@ -159,6 +159,49 @@ describe('Glasses', () => {
     expect(pages.at(-1)?.texts.find(t => t.name === 'body')?.content).toContain('No chats picked')
   })
 
+  it('"Later" marks the chat unread, says so, then moves on to the next chat', () => {
+    const { g, sent, texts, page } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    expect(page().menu?.[0]).toEqual({ name: 'Later: keep unread', id: 7 })
+    g.input({ kind: 'MENU', itemId: 7 })
+    expect(sent.at(-1)).toEqual({ type: 'later', chatId: 'a' })
+    expect(texts.at(-1)).toEqual(['hdr', 'Kept unread for later ●'])
+    vi.advanceTimersByTime(1000)
+    expect(sent.at(-1)).toEqual({ type: 'open_chat', chatId: 'b' })
+  })
+
+  it('"Later" goes back to the Inbox in quiet hours', () => {
+    const { g, sent, page } = setup([chat('a', 1), chat('b', 2)])
+    const quiet = state([chat('a', 1), chat('b', 2)])
+    g.render({ ...quiet, inbox: { ...quiet.inbox!, quiet: { active: true, until: '08:00' } } })
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 7 })
+    vi.advanceTimersByTime(1000)
+    expect(page().id).toBe('inbox')
+    expect(sent.filter(m => m.type === 'open_chat')).toHaveLength(1)
+  })
+
+  it('a failed "Later" stays on the card and says why', () => {
+    const { g, sent, texts, page } = setup()
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    g.onCard(card('a'))
+    g.input({ kind: 'MENU', itemId: 7 })
+    g.onError({ code: 'failed', human: "Telegram didn't accept it. Try again.", for: 'later', chatId: 'a' })
+    expect(texts.at(-1)).toEqual(['hdr', "Couldn't keep it for later: Telegram didn't accept it. Try again."])
+    vi.advanceTimersByTime(1000)
+    expect(page().id).toBe('card')
+    expect(sent.filter(m => m.type === 'open_chat')).toHaveLength(1)
+  })
+
+  it('opens a breakthrough chat from the Inbox like a picked one', () => {
+    const { g, sent, pages } = setup([{ ...chat('dana', 1), breakthrough: true }, chat('b', 2)])
+    expect(pages.at(-1)?.list?.items[0]).toBe('+ dana · 1')
+    g.input({ kind: 'LIST_SELECT', index: 0 })
+    expect(sent.at(-1)).toEqual({ type: 'open_chat', chatId: 'dana' })
+  })
+
   it('double-tap on the card goes back to the Inbox', () => {
     const { g, page } = setup()
     g.input({ kind: 'LIST_SELECT', index: 0 })

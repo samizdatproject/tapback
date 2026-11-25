@@ -1,4 +1,4 @@
-"""User settings for triage: VIP senders, urgent keywords and quiet hours (pure, unit-tested)."""
+"""User settings for triage: VIP senders, urgent keywords, quiet hours and breakthrough (pure, unit-tested)."""
 
 from __future__ import annotations
 
@@ -23,11 +23,13 @@ class Settings:
     quiet_enabled: bool = False
     quiet_start: str = "22:00"
     quiet_end: str = "08:00"
+    breakthrough: bool = False  # opt-in: VIP private chats and @mentions from chats that aren't picked
 
     def to_json(self) -> dict:
         d = asdict(self)
         return {"vip": d["vip"], "keywords": d["keywords"],
-                "quiet": {"enabled": d["quiet_enabled"], "start": d["quiet_start"], "end": d["quiet_end"]}}
+                "quiet": {"enabled": d["quiet_enabled"], "start": d["quiet_start"], "end": d["quiet_end"]},
+                "breakthrough": d["breakthrough"]}
 
     @classmethod
     def from_json(cls, data: dict | None) -> "Settings":
@@ -57,9 +59,13 @@ class Settings:
         start, end = str(quiet.get("start", "22:00")), str(quiet.get("end", "08:00"))
         if not (_TIME.match(start) and _TIME.match(end)):
             raise SettingsError("Quiet hours use HH:MM, for example 22:00")
+        breakthrough = data.get("breakthrough", False)
+        if not isinstance(breakthrough, bool):
+            raise SettingsError("breakthrough must be true or false")
         return cls(vip=clean_list("vip", strip_at=True),
                    keywords=clean_list("keywords") if "keywords" in data else list(DEFAULT_KEYWORDS),
-                   quiet_enabled=bool(quiet.get("enabled", False)), quiet_start=start, quiet_end=end)
+                   quiet_enabled=bool(quiet.get("enabled", False)), quiet_start=start, quiet_end=end,
+                   breakthrough=breakthrough)
 
 
 def keyword_pattern(keywords: list[str]) -> re.Pattern | None:

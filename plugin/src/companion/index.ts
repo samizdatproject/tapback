@@ -68,7 +68,7 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
     'section',
     { className: 'card' },
     el('h2', {}, 'Pick chats'),
-    el('p', { className: 'hint' }, 'Only these chats show up on your glasses.'),
+    el('p', { className: 'hint' }, 'Only these chats show up on your glasses, unless you turn on breakthrough under Triage.'),
     chatList,
     el('div', { className: 'row' }, reloadButton, saveButton),
   )
@@ -91,7 +91,7 @@ export function mountCompanion(root: HTMLElement, store: Store, actions: Compani
       { className: 'privacy' },
       ...[
         'TapBack is an unofficial Telegram client. It uses the Telegram API.',
-        'Only chats you pick reach the glasses. Opening a card marks it read.',
+        'Only chats you pick reach the glasses, plus breakthrough chats if you turn that on. Opening a card marks it read.',
         'Reply suggestions come from fixed rules. No message is sent to any AI service.',
         "Dictation audio goes only to your own server's speech-to-text.",
         'Sponsored messages in channels are shown as Telegram requires.',

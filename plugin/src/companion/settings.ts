@@ -36,5 +36,7 @@ export function settingsBody(s: Settings): { body: Settings | null; error: strin
   if (!validTime(s.quiet.start) || !validTime(s.quiet.end)) {
     return { body: null, error: 'Quiet hours need a start and an end time.' }
   }
-  return { body: { vip: [...s.vip], keywords: [...s.keywords], quiet: { ...s.quiet } }, error: null }
+  const body: Settings = { vip: [...s.vip], keywords: [...s.keywords], quiet: { ...s.quiet } }
+  if (s.breakthrough !== undefined) body.breakthrough = s.breakthrough
+  return { body, error: null }
 }

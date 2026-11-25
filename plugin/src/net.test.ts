@@ -27,6 +27,32 @@ describe('urls', () => {
 })
 
 describe('parseServerMsg', () => {
+  it('keeps the later and breakthrough marks only when they are true', () => {
+    const msg = parseServerMsg(
+      JSON.stringify({
+        type: 'inbox',
+        chats: [
+          { id: 1, title: 'Dana', kind: 'user', unread: 0, later: true, breakthrough: false },
+          { id: 2, title: 'Ops', kind: 'group', unread: 2, flag: '!', later: false, breakthrough: true },
+        ],
+        totals: { unread: 2, chats: 1 },
+      }),
+    )
+    expect(msg?.type === 'inbox' && msg.chats).toEqual([
+      { id: '1', title: 'Dana', kind: 'user', unread: 0, later: true },
+      { id: '2', title: 'Ops', kind: 'group', unread: 2, flag: '!', breakthrough: true },
+    ])
+  })
+
+  it('parses the result of "later"', () => {
+    expect(parseServerMsg(JSON.stringify({ type: 'later', chatId: 42, ok: true }))).toEqual({
+      type: 'later',
+      chatId: '42',
+      ok: true,
+    })
+    expect(parseServerMsg(JSON.stringify({ type: 'later', ok: true }))).toBeNull()
+  })
+
   it('parses an inbox and coerces ids to strings', () => {
     const msg = parseServerMsg(
       JSON.stringify({

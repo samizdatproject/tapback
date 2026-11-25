@@ -7,7 +7,7 @@ export interface TriageActions {
   saveSettings(settings: Settings): Promise<Settings>
 }
 
-/** "Triage" card: VIP senders, urgent words, quiet hours. */
+/** "Triage" card: VIP senders, urgent words, quiet hours, breakthrough. */
 export function triageSection(actions: TriageActions): { element: HTMLElement; load(): Promise<void> } {
   let model: Settings | null = null
 
@@ -119,8 +119,39 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
     ),
   )
 
+  const breakthroughOn = el('input', { type: 'checkbox', id: 'breakthrough-on' })
+  breakthroughOn.addEventListener('change', () => {
+    if (model) model = { ...model, breakthrough: breakthroughOn.checked }
+  })
+  const breakthrough = el(
+    'div',
+    { className: 'field' },
+    el('h3', {}, 'Breakthrough'),
+    el(
+      'p',
+      { className: 'hint' },
+      'Private chats with a VIP, and groups that @mention you, show with + while they have unread messages. Channels never do.',
+    ),
+    el(
+      'label',
+      { className: 'toggle', htmlFor: 'breakthrough-on' },
+      breakthroughOn,
+      "Let VIPs and @mentions through from chats you didn't pick",
+    ),
+  )
+
   const save = el('button', { type: 'button', className: 'primary' }, 'Save')
-  const body = el('div', { className: 'stack', hidden: true }, vip.block, words.block, quiet, error, saved, el('div', { className: 'row' }, save))
+  const body = el(
+    'div',
+    { className: 'stack', hidden: true },
+    vip.block,
+    words.block,
+    quiet,
+    breakthrough,
+    error,
+    saved,
+    el('div', { className: 'row' }, save),
+  )
   const status = el('p', { className: 'hint' }, 'Loading…')
   const element = el(
     'section',
@@ -132,8 +163,9 @@ export function triageSection(actions: TriageActions): { element: HTMLElement; l
   )
 
   function show(s: Settings) {
-    model = { vip: [...s.vip], keywords: [...s.keywords], quiet: { ...s.quiet } }
+    model = { vip: [...s.vip], keywords: [...s.keywords], quiet: { ...s.quiet }, breakthrough: s.breakthrough === true }
     quietOn.checked = s.quiet.enabled
+    breakthroughOn.checked = s.breakthrough === true
     start.value = s.quiet.start
     end.value = s.quiet.end
     vip.render()

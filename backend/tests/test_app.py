@@ -20,11 +20,26 @@ class FakeTG:
     def __init__(self):
         self.calls = []
         self.fail_send = False
+        self.fail_unread = False
         self.logout_ok = True
+        self.breaking = set()  # chats that break through right now (until read)
+        self.marked = set()  # chats marked unread in Telegram
 
     async def chats(self, picked, prefs=None):
         self.last_prefs = prefs
-        return [dict(c, picked=c["id"] in picked) for c in CHATS]
+        on = bool(prefs and prefs.breakthrough)
+        return [dict(c, picked=c["id"] in picked, later=c["id"] in self.marked,
+                     breakthrough=on and c["id"] in self.breaking and c["id"] not in picked) for c in CHATS]
+
+    async def breakthrough(self, chat_id, prefs):
+        self.calls.append(("check", chat_id))
+        return chat_id in self.breaking
+
+    async def mark_unread(self, chat_id, unread):
+        if self.fail_unread:
+            raise RuntimeError("boom")
+        self.calls.append(("unread", chat_id, unread))
+        (self.marked.add if unread else self.marked.discard)(chat_id)
 
     async def chat_kind(self, chat_id):
         return KINDS[chat_id]
@@ -32,10 +47,14 @@ class FakeTG:
     async def card(self, chat_id):
         self.calls.append(("card", chat_id))
         return {"type": "card", "chat": {"id": chat_id}, "msgs": [{"id": 7}], "replyTo": None,
-                "suggestions": ["Yes", "No", "Let me check", "React: thumbs up"], "newCount": 1, "earlier": 0, "readMaxId": 7}
+                "suggestions": ["Yes", "No", "Let me check", "React: thumbs up"], "newCount": 1, "earlier": 0, "readMaxId": 7,
+                "later": chat_id in self.marked}
 
-    async def mark_read(self, chat_id, max_id):
+    async def mark_read(self, chat_id, max_id, clear_mentions=False):
         self.calls.append(("read", chat_id, max_id))
+        if clear_mentions:
+            self.calls.append(("clear_mentions", chat_id))
+        self.breaking.discard(chat_id)  # read: it no longer qualifies
 
     async def send(self, chat_id, reply_to, text, reaction):
         if self.fail_send:
@@ -101,6 +120,24 @@ def test_build_inbox_picked_only_flagged_then_unread_first():
     assert [c["title"] for c in flagged["chats"]] == ["Alice", "Acme Work"]
 
 
+def test_build_inbox_orders_later_after_unread_and_adds_breakthrough():
+    chats = [
+        {"id": "1", "title": "Quiet", "kind": "group", "unread": 0},
+        {"id": "2", "title": "Later", "kind": "user", "unread": 0, "later": True},
+        {"id": "3", "title": "Busy", "kind": "group", "unread": 4},
+        {"id": "4", "title": "Dana", "kind": "user", "unread": 1, "breakthrough": True},
+        {"id": "5", "title": "Muted VIP", "kind": "user", "unread": 1, "breakthrough": True},
+        {"id": "6", "title": "Ops", "kind": "group", "unread": 2, "flag": "!", "breakthrough": True},
+        {"id": "7", "title": "Not picked", "kind": "user", "unread": 9},
+    ]
+    inbox = build_inbox(chats, ["1", "2", "3"], hidden={"5"})
+    assert [c["title"] for c in inbox["chats"]] == ["Ops", "Busy", "Dana", "Later", "Quiet"]
+    rows = {c["id"]: c for c in inbox["chats"]}
+    assert rows["2"]["later"] and not rows["1"]["later"]
+    assert rows["4"]["breakthrough"] and rows["6"]["breakthrough"] and not rows["3"]["breakthrough"]
+    assert inbox["totals"] == {"unread": 7, "chats": 3}
+
+
 def test_healthz_has_tagline(env):
     client, *_ = env
     body = client.get("/healthz").json()
@@ -162,6 +199,7 @@ def test_open_chat_marks_read_only_when_card_shown(env):
     ws.send_json({"type": "card_shown", "chatId": "-1001", "maxId": 7})
     assert ws.receive_json()["type"] == "inbox"
     assert ("read", "-1001", 7) in client.tg.calls
+    assert ("clear_mentions", "-1001") not in client.tg.calls  # picked: mentions are left alone
     ws.close()
 
 
@@ -342,4 +380,119 @@ def test_reply_choices_are_learned_per_chat(env):
     ws.send_json({"type": "open_chat", "chatId": "-1001"})
     card = _until(ws, "card")
     assert card["suggestions"] == ["Let me check", "Yes", "No", "React: thumbs up"]
+    ws.close()
+
+
+# --- later (marked unread in Telegram) -------------------------------------------------------
+
+def test_later_marks_the_chat_unread_and_showing_it_clears_the_mark(env):
+    client, store, _, token = env
+    store.set_picked(["-1001", "-1002"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "later", "chatId": "-1001"})
+    assert ws.receive_json() == {"type": "later", "chatId": "-1001", "ok": True}
+    inbox = ws.receive_json()
+    assert inbox["type"] == "inbox" and inbox["chats"][0]["later"] is True
+    assert ("unread", "-1001", True) in client.tg.calls
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})
+    card = _until(ws, "card")
+    assert "later" not in card  # server-side only
+    ws.send_json({"type": "card_shown", "chatId": "-1001", "maxId": 7})
+    assert ws.receive_json()["type"] == "inbox"
+    assert client.tg.calls[-2:] == [("read", "-1001", 7), ("unread", "-1001", False)]
+    ws.send_json({"type": "card_shown", "chatId": "-1001", "maxId": 7})  # mark already cleared
+    assert ws.receive_json()["type"] == "inbox"
+    assert client.tg.calls.count(("unread", "-1001", False)) == 1
+    ws.close()
+
+
+def test_later_uses_the_chat_guard_and_reports_failures(env):
+    client, store, _, token = env
+    store.set_picked(["-1001", "-1002"])
+    ws = _ws(client, token)
+    ws.send_json({"type": "later", "chatId": "42"})
+    err = ws.receive_json()
+    assert err == {"type": "error", "code": "not_picked", "human": "That chat isn't picked", "for": "later", "chatId": "42"}
+    ws.send_json({"type": "later", "chatId": "-1002"})
+    assert ws.receive_json()["code"] == "channel"
+    client.tg.fail_unread = True
+    ws.send_json({"type": "later", "chatId": "-1001"})
+    err = ws.receive_json()
+    assert err["type"] == "error" and err["for"] == "later" and err["human"] == "Telegram didn't accept it. Try again."
+    assert not [c for c in client.tg.calls if c[0] == "unread"]
+    ws.close()
+
+
+# --- breakthrough --------------------------------------------------------------------------------
+
+def test_breakthrough_chats_reach_the_inbox_only_when_opted_in(env):
+    client, store, headers, token = env
+    store.set_picked(["-1001"])
+    client.tg.breaking = {"42"}
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_inbox"})
+    assert [c["id"] for c in ws.receive_json()["chats"]] == ["-1001"]
+    client.put("/settings", headers=headers, json={"breakthrough": True})
+    inbox = ws.receive_json()  # the settings change is broadcast
+    assert [(c["id"], c["breakthrough"]) for c in inbox["chats"]] == [("-1001", False), ("42", True)]
+    ws.send_json({"type": "snooze", "chatId": "42", "minutes": 30})  # TapBack snoozes apply
+    assert [c["id"] for c in ws.receive_json()["chats"]] == ["-1001"]
+    ws.close()
+
+
+def test_a_snoozed_pick_never_comes_back_as_breakthrough(env):
+    client, store, headers, token = env
+    store.set_picked(["42"])
+    client.put("/settings", headers=headers, json={"breakthrough": True})
+    client.tg.breaking = {"42"}
+    store.hide("42", 30)
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_inbox"})
+    assert ws.receive_json()["chats"] == []
+    ws.close()
+
+
+def test_breakthrough_chat_can_be_opened_read_and_answered(env):
+    client, store, headers, token = env
+    client.put("/settings", headers=headers, json={"breakthrough": True})
+    client.tg.breaking = {"42"}
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "42"})
+    assert _until(ws, "card")["chat"]["id"] == "42"
+    ws.send_json({"type": "card_shown", "chatId": "42", "maxId": 7})  # read receipt, as for picked chats
+    assert ws.receive_json()["type"] == "inbox"
+    assert ("read", "42", 7) in client.tg.calls and "42" not in client.tg.breaking
+    assert ("clear_mentions", "42") in client.tg.calls  # not picked: its mention counter is cleared too
+    # Read now, so it no longer qualifies; the server's own earlier check still lets the reply out.
+    ws.send_json({"type": "send", "chatId": "42", "replyTo": 7, "text": "On my way", "clientMsgId": "b1"})
+    assert ws.receive_json()["ok"]
+    ws.send_json({"type": "later", "chatId": "42"})
+    assert ws.receive_json()["ok"]
+    assert client.tg.calls.count(("check", "42")) == 1
+    ws.close()
+
+
+def test_breakthrough_is_checked_on_the_server_never_trusted(env):
+    client, store, headers, token = env
+    client.tg.breaking = {"42", "-1002"}
+    ws = _ws(client, token)
+    ws.send_json({"type": "open_chat", "chatId": "42"})  # setting is off
+    assert ws.receive_json()["code"] == "not_picked"
+    ws.send_json({"type": "send", "chatId": "42", "text": "hi", "clientMsgId": "x1"})
+    assert not ws.receive_json()["ok"]
+    client.put("/settings", headers=headers, json={"breakthrough": True})
+    ws.receive_json()  # broadcast inbox
+    ws.send_json({"type": "open_chat", "chatId": "-1001"})  # unpicked and doesn't qualify
+    assert ws.receive_json()["code"] == "not_picked"
+    ws.send_json({"type": "open_chat", "chatId": "-1002"})  # channels stay excluded
+    assert ws.receive_json()["code"] == "channel"
+    ws.send_json({"type": "open_chat", "chatId": "not-a-number"})
+    assert ws.receive_json()["code"] == "not_picked"
+    assert client.tg.sends() == []
+    ws.send_json({"type": "open_chat", "chatId": "42"})
+    assert _until(ws, "card")["chat"]["id"] == "42"
+    client.put("/settings", headers=headers, json={"breakthrough": False})
+    ws.receive_json()
+    ws.send_json({"type": "open_chat", "chatId": "42"})  # turning it off ends earlier checks too
+    assert ws.receive_json()["code"] == "not_picked"
     ws.close()

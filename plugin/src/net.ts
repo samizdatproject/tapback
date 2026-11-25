@@ -8,6 +8,10 @@ export interface InboxChat {
   unread: number
   /** "!" mention or urgent word, "★" message from a VIP sender (the server sorts these first). */
   flag?: '!' | '★' | ''
+  /** Marked unread in Telegram ("Later", or "Mark as unread" on the phone). */
+  later?: true
+  /** Not picked, but let through: a VIP's private chat or a group that mentions you. */
+  breakthrough?: true
 }
 export interface Chat extends InboxChat {
   picked: boolean
@@ -28,6 +32,8 @@ export interface Settings {
   vip: string[]
   keywords: string[]
   quiet: { enabled: boolean; start: string; end: string }
+  /** Let VIPs and @mentions through from chats that aren't picked (off by default). */
+  breakthrough?: boolean
 }
 
 export interface CardMsg {
@@ -99,6 +105,7 @@ export type ServerMsg =
   | ({ type: 'sent' } & SentMsg)
   | ({ type: 'stt' } & SttMsg)
   | { type: 'digest'; channels: DigestChannel[] }
+  | { type: 'later'; chatId: string; ok: true }
   | ({ type: 'error' } & ServerError)
 /** Client → server. */
 export type ClientMsg =
@@ -108,6 +115,7 @@ export type ClientMsg =
   | { type: 'send'; chatId: string; replyTo: number | null; text?: string; reaction?: string; clientMsgId: string }
   | { type: 'mute'; chatId: string; minutes: number }
   | { type: 'snooze'; chatId: string; minutes: number }
+  | { type: 'later'; chatId: string }
   | { type: 'audio_begin'; id: string }
   | { type: 'audio_end' }
   | { type: 'audio_cancel' }
@@ -128,6 +136,8 @@ function parseChat(raw: unknown): InboxChat | null {
   const kind = c.kind === 'group' || c.kind === 'channel' ? c.kind : 'user'
   const chat: InboxChat = { id: String(c.id), title: str(c.title), kind, unread: num(c.unread) }
   if (c.flag === '!' || c.flag === '★') chat.flag = c.flag
+  if (c.later === true) chat.later = true
+  if (c.breakthrough === true) chat.breakthrough = true
   return chat
 }
 
@@ -221,6 +231,10 @@ export function parseServerMsg(data: unknown): ServerMsg | null {
       return { type: 'stt', id: str(msg.id), text: str(msg.text).trim(), human: str(msg.human, "Didn't catch that") }
     case 'digest':
       return { type: 'digest', channels: (Array.isArray(msg.channels) ? msg.channels : []).flatMap(parseChannel) }
+    case 'later': {
+      const chatId = str(msg.chatId)
+      return chatId && msg.ok === true ? { type: 'later', chatId, ok: true } : null
+    }
     case 'error': {
       const err: ServerError = { code: str(msg.code), human: str(msg.human, 'Server error') }
       if (typeof msg.for === 'string') err.for = msg.for

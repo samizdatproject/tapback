@@ -29,6 +29,12 @@ describe('triage settings model', () => {
     expect(DEFAULT_KEYWORDS).toEqual(['urgent', 'asap', 'now', 'today', 'call me', 'deadline', 'down', 'failed', 'liquidat*'])
   })
 
+  it('keeps the breakthrough choice in the PUT body', () => {
+    const s = { vip: [], keywords: [], quiet: { enabled: false, start: '22:00', end: '08:00' }, breakthrough: true }
+    expect(settingsBody(s).body?.breakthrough).toBe(true)
+    expect(settingsBody({ ...s, breakthrough: false }).body?.breakthrough).toBe(false)
+  })
+
   it('builds the PUT body, or explains a missing time', () => {
     const s = { vip: ['dana'], keywords: ['urgent'], quiet: { enabled: false, start: '22:00', end: '08:00' } }
     expect(settingsBody(s)).toEqual({ body: s, error: null })

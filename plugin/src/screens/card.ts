@@ -4,6 +4,7 @@ import { LINE_UNITS, fitWidth, textWidth, wrapText } from './text'
 
 export const MENU_MUTE = 2
 export const MENU_SNOOZE = 3
+export const MENU_LATER = 7
 export const MUTE_MINUTES = 60
 export const SNOOZE_MINUTES = 30
 
@@ -58,6 +59,7 @@ export function cardPage(card: Card, pos: { n: number; m: number } | null): Page
       { name: 'ftr', ...FOOTER, content: 'tap reply · ▼ next · 2x back', dim: true },
     ],
     menu: [
+      { name: 'Later: keep unread', id: MENU_LATER },
       { name: 'Mute chat 1h', id: MENU_MUTE },
       { name: 'Snooze 30 min', id: MENU_SNOOZE },
     ],

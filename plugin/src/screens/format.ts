@@ -1,4 +1,4 @@
-import type { InboxChat, LinkStatus, Totals } from '../net'
+import type { Inbox, InboxChat, LinkStatus, Totals } from '../net'
 
 // Measured in the simulator: about 10 lines of about 55 proportional
 // characters. List items are capped at 63 UTF-8 bytes by the simulator.
@@ -24,9 +24,15 @@ export function fit(text: string, maxChars: number, maxBytes = Infinity): string
   return out.join('').trimEnd() + '…'
 }
 
+/**
+ * "+" marks a chat that isn't picked but broke through (plain ASCII: the G2 font
+ * drops many glyphs), then the flag; "later" marks a chat kept unread for later.
+ */
 export function inboxRow(chat: InboxChat): string {
-  const prefix = chat.flag ? `${chat.flag} ` : ''
-  const suffix = chat.unread > 0 ? ` · ${chat.unread > 999 ? '999+' : chat.unread}` : ''
+  const marks = (chat.breakthrough ? '+' : '') + (chat.flag ?? '')
+  const prefix = marks ? `${marks} ` : ''
+  const count = chat.unread > 0 ? ` · ${chat.unread > 999 ? '999+' : chat.unread}` : ''
+  const suffix = count + (chat.later ? ' · later' : '')
   const title = chat.title.replace(/\s+/g, ' ').trim() || 'Untitled chat'
   const extra = prefix + suffix
   const room = { chars: ROW_MAX_CHARS - Array.from(extra).length, bytes: ROW_MAX_BYTES - bytes(extra) }
@@ -39,14 +45,19 @@ export function inboxRows(chats: InboxChat[]): string[] {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-export function headerText(totals: Totals | null, quiet?: { active: boolean; until: string }): string {
+/** `later`: chats kept unread for later, so "all caught up" is never shown while some wait. */
+export function headerText(totals: Totals | null, quiet?: { active: boolean; until: string }, later = 0): string {
   if (quiet?.active) {
     const head = quiet.until ? `Quiet until ${quiet.until}` : 'Quiet hours'
     return totals && totals.unread > 0 ? `${head} · ${totals.unread} new` : head
   }
   if (!totals) return 'TapBack'
-  if (totals.unread <= 0) return 'TapBack · all caught up'
-  return `TapBack · ${totals.unread} new in ${plural(totals.chats, 'chat')}`
+  if (totals.unread <= 0) return later > 0 ? `TapBack · ${later} for later` : 'TapBack · all caught up'
+  return `TapBack · ${totals.unread} new in ${plural(totals.chats, 'chat')}` + (later > 0 ? ` · ${later} later` : '')
+}
+
+export function inboxHeader(inbox: Inbox | null): string {
+  return headerText(inbox?.totals ?? null, inbox?.quiet, inbox?.chats.filter(c => c.later).length ?? 0)
 }
 
 export function footerText(link: LinkStatus, stale: boolean): string {

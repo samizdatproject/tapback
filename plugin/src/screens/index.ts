@@ -1,7 +1,7 @@
 import type { Input } from '../bridge'
 import type { Card, ClientMsg, DigestChannel, Inbox, InboxChat, SentMsg, ServerError, SttMsg } from '../net'
 import type { State } from '../state'
-import { MENU_MUTE, MENU_SNOOZE, MUTE_MINUTES, SNOOZE_MINUTES, cardHeader, cardPage } from './card'
+import { MENU_LATER, MENU_MUTE, MENU_SNOOZE, MUTE_MINUTES, SNOOZE_MINUTES, cardHeader, cardPage } from './card'
 import { Dictation, dictatePage, dictateTarget, dictateText, type DictPhase } from './dictate'
 import {
   MENU_BACK_TO_INBOX,
@@ -15,7 +15,7 @@ import {
   sponsorInfoPage,
   type DigestPage,
 } from './digest'
-import { LIST_MAX_ITEMS, bodyOf, footerText, headerText, inboxRows, planInbox, type ShownInbox } from './format'
+import { LIST_MAX_ITEMS, bodyOf, footerText, inboxHeader, inboxRows, planInbox, type ShownInbox } from './format'
 import { MENU_REFRESH, inboxPage } from './inbox'
 import { introPage } from './intro'
 import type { ScreenManager } from './manager'
@@ -122,7 +122,7 @@ export class Glasses {
     }
     if (state.inbox && state.inbox !== this.lastInbox) this.entry = false
     this.lastInbox = state.inbox
-    this.screens.setText('hdr', this.inboxStatus ?? headerText(state.inbox?.totals ?? null, state.inbox?.quiet))
+    this.screens.setText('hdr', this.inboxStatus ?? inboxHeader(state.inbox))
     this.screens.setText('ftr', footerText(state.link, this.stale))
   }
 
@@ -183,7 +183,7 @@ export class Glasses {
           const mute = input.itemId === MENU_MUTE
           this.send({ type: mute ? 'mute' : 'snooze', chatId, minutes: mute ? MUTE_MINUTES : SNOOZE_MINUTES })
           this.step(chatId, 1)
-        }
+        } else if (input.kind === 'MENU' && input.itemId === MENU_LATER) this.keepForLater(view.card)
         break
       case 'replies':
         if (input.kind === 'DOUBLE') this.showCard(view.card)
@@ -274,8 +274,8 @@ export class Glasses {
       this.view.flow.fail(err.human)
     } else if (this.view.name === 'dictate' && (err.for === undefined || err.for.startsWith('audio_'))) {
       this.view.dict.fail(err.human)
-    } else if ((err.for === 'mute' || err.for === 'snooze') && !p) {
-      this.flash(`Couldn't ${err.for}: ${err.human}`)
+    } else if ((err.for === 'mute' || err.for === 'snooze' || err.for === 'later') && !p) {
+      this.flash(`Couldn't ${err.for === 'later' ? 'keep it for later' : err.for}: ${err.human}`)
     }
   }
 
@@ -325,6 +325,22 @@ export class Glasses {
     const next = neighbour(this.order, this.chats, fromChatId, dir)
     if (next) this.open(next)
     else this.toInbox()
+  }
+
+  /**
+   * Glanced but can't answer now: the server marks the chat unread in Telegram, so
+   * the phone shows it too. Then on to the next chat, as after a send.
+   */
+  private keepForLater(card: Card): void {
+    const chatId = card.chat.id
+    if (!this.send({ type: 'later', chatId })) {
+      this.flash('Offline · try again in a moment')
+      return
+    }
+    this.status('Kept unread for later ●')
+    // Quiet hours: nothing moves on by itself.
+    const quiet = this.state?.inbox?.quiet?.active === true
+    this.later(() => (quiet ? this.toInbox() : this.step(chatId, 1)))
   }
 
   private showCard(card: Card): void {
@@ -461,7 +477,7 @@ export class Glasses {
     switch (view.name) {
       case 'inbox':
         this.inboxStatus = text
-        this.screens.setText('hdr', text ?? headerText(this.state?.inbox?.totals ?? null, this.state?.inbox?.quiet))
+        this.screens.setText('hdr', text ?? inboxHeader(this.state?.inbox ?? null))
         break
       case 'card':
         this.screens.setText('hdr', text ?? cardHeader(view.card, position(this.order, this.chats, view.card.chat.id)))

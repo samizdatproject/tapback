@@ -13,6 +13,16 @@ describe('neighbour', () => {
     expect(neighbour(order, latest, 'acme', -1)).toBeNull()
   })
 
+  it('never steps into a chat kept for later: showing it would clear the mark', () => {
+    const latest = [c('acme', 1), { ...c('alice', 0), later: true as const }, c('news', 0), c('ops', 2)]
+    expect(neighbour(order, latest, 'acme', 1)?.id).toBe('ops')
+  })
+
+  it('reaches breakthrough chats like picked ones', () => {
+    const latest = [c('acme', 1), { ...c('dana', 2), breakthrough: true as const }]
+    expect(neighbour(order, latest, 'acme', 1)?.id).toBe('dana')
+  })
+
   it('skips chats without unread', () => {
     const latest = [c('acme', 0), c('alice', 0), c('news', 5), c('ops', 0)]
     expect(neighbour(order, latest, 'acme', 1)?.id).toBe('news')

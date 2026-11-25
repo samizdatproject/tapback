@@ -36,6 +36,7 @@ MUTE_MINUTES = {60, 480}
 SNOOZE_MINUTES = {30, 60}
 RESULT_TTL_S = 600
 MAX_PICKED = 50
+BREAKTHROUGH_GRANT_S = 900  # a breakthrough chat stays reachable this long after the server checked it
 
 
 class Telegram(Protocol):
@@ -43,8 +44,10 @@ class Telegram(Protocol):
     async def card(self, chat_id: str) -> dict: ...
     async def send(self, chat_id: str, reply_to: int | None, text: str | None, reaction: str | None) -> None: ...
     async def mute(self, chat_id: str, minutes: int) -> None: ...
+    async def mark_unread(self, chat_id: str, unread: bool) -> None: ...
+    async def breakthrough(self, chat_id: str, prefs: Settings) -> bool: ...
     async def digest(self, channel_ids: list[str]) -> list[dict]: ...
-    async def mark_read(self, chat_id: str, max_id: int) -> None: ...
+    async def mark_read(self, chat_id: str, max_id: int, clear_mentions: bool = False) -> None: ...
     async def view_sponsored(self, random_id_b64: str) -> bool: ...
     async def log_out(self) -> bool: ...
     async def chat_kind(self, chat_id: str) -> str: ...
@@ -66,12 +69,15 @@ class Hub:
         self.sockets: set[WebSocket] = set()
         self.sends: deque[float] = deque()  # across all devices and reconnects
         self.results: dict[str, tuple[float, asyncio.Future]] = {}
+        self.granted: dict[str, float] = {}  # breakthrough chat id -> when the server last confirmed it
 
     async def inbox(self) -> dict:
         hidden = self.store.hidden()
-        visible = [c for c in self.store.picked() if c not in hidden]
+        picked = self.store.picked()
+        visible = [c for c in picked if c not in hidden]
         prefs = self.store.settings()
-        inbox = build_inbox(await self.tg.chats(visible, prefs), visible)
+        # All picks go to tg.chats, so a muted pick never comes back as a breakthrough chat.
+        inbox = build_inbox(await self.tg.chats(picked, prefs), visible, hidden)
         # Quiet hours: the glasses show counts only and don't move on to the next card by themselves.
         inbox["quiet"] = {"active": in_quiet_hours(prefs, datetime.now().time()), "until": prefs.quiet_end}
         return inbox
@@ -85,6 +91,26 @@ class Hub:
                 await ws.send_text(msg)
             except Exception:
                 self.sockets.discard(ws)
+
+    async def allowed(self, chat_id) -> str | None:
+        """A picked chat, or an unpicked one that breaks through, as checked here on Telegram.
+
+        Once confirmed, a breakthrough chat stays allowed for a while: showing its card marks it
+        read, and it would otherwise stop qualifying before the reply goes out.
+        """
+        cid = str(chat_id or "")
+        if cid in self.store.picked():
+            return cid
+        prefs = self.store.settings()
+        if not prefs.breakthrough or not cid.lstrip("-").isdigit():
+            return None
+        now = time.monotonic()
+        if now - self.granted.get(cid, -BREAKTHROUGH_GRANT_S) < BREAKTHROUGH_GRANT_S:
+            return cid
+        if not await self.tg.breakthrough(cid, prefs):
+            return None
+        self.granted[cid] = now
+        return cid
 
     def rate_ok(self) -> bool:
         now = time.monotonic()
@@ -110,6 +136,7 @@ class Session:
         self.dictation_id = ""
         self.tasks: set[asyncio.Task] = set()
         self.current: dict = {}
+        self.unmark: set[str] = set()  # chats whose card was opened while marked unread (Later)
 
     async def audio(self, chunk: bytes) -> None:
         self.recorder.add(chunk)
@@ -129,8 +156,8 @@ class Session:
         return cid if cid in self.hub.store.picked() else None
 
     async def _chat(self, chat_id) -> str | None:
-        """A picked chat that isn't a broadcast channel (channels open in the digest)."""
-        cid = self._picked(chat_id)
+        """A picked or breakthrough chat that isn't a broadcast channel (channels open in the digest)."""
+        cid = await self.hub.allowed(chat_id)
         if cid is None:
             await self.reply({"type": "error", "code": "not_picked", "human": "That chat isn't picked"})
             return None
@@ -148,16 +175,27 @@ class Session:
             cid = await self._chat(msg.get("chatId"))
             if cid is not None:
                 card = await self.hub.tg.card(cid)
+                if card.pop("later", False):
+                    self.unmark.add(cid)
                 card["suggestions"] = rules.order_by_counts(card["suggestions"], self.hub.store.reply_counts(cid))
                 await self.reply(card)
         elif kind == "card_shown":
             # Telegram API terms 1.4 (no ghost mode): what the glasses actually displayed is marked read,
             # and only that, so a card that never reached the screen leaves the chat unread.
-            cid = self._picked(msg.get("chatId"))
-            if cid is not None and isinstance(msg.get("maxId"), int):
-                await self.hub.tg.mark_read(cid, msg["maxId"])
+            cid = await self.hub.allowed(msg.get("chatId"))
+            later = cid is not None and cid in self.unmark
+            if cid is None or not (later or isinstance(msg.get("maxId"), int)):
+                return
+            if isinstance(msg.get("maxId"), int):
+                breakthrough = cid not in self.hub.store.picked()
+                await self.hub.tg.mark_read(cid, msg["maxId"], clear_mentions=breakthrough)
                 log.info("card shown: marked a chat read")
-                await self.hub.broadcast()
+            if later:  # seen now, so it no longer waits for later
+                self.unmark.discard(cid)
+                await self.hub.tg.mark_unread(cid, False)
+            await self.hub.broadcast()
+        elif kind == "later":
+            await self.later(msg)
         elif kind == "send":
             await self.send(msg)
         elif kind == "digest_open":
@@ -191,7 +229,7 @@ class Session:
         elif kind == "sponsored_viewed":
             await self.hub.tg.view_sponsored(str(msg.get("randomId") or ""))
         elif kind in ("mute", "snooze"):
-            cid = self._picked(msg.get("chatId"))
+            cid = await self.hub.allowed(msg.get("chatId"))
             minutes = int(msg.get("minutes") or 0) if str(msg.get("minutes") or "0").isdigit() else 0
             if cid is None or minutes not in (MUTE_MINUTES if kind == "mute" else SNOOZE_MINUTES):
                 await self.reply({"type": "error", "code": "bad_request", "human": "Can't do that"})
@@ -200,6 +238,22 @@ class Session:
                 await self.hub.tg.mute(cid, minutes)
             self.hub.store.hide(cid, minutes)
             await self.hub.broadcast()
+
+    async def later(self, msg: dict) -> None:
+        """Glanced but can't answer now: Telegram's own "Mark as unread", so the phone shows it too."""
+        cid = await self._chat(msg.get("chatId"))
+        if cid is None:
+            return
+        try:
+            await self.hub.tg.mark_unread(cid, True)
+        except Exception as exc:
+            log.warning("mark unread failed: %s", type(exc).__name__)
+            await self.reply({"type": "error", "code": "failed", "human": "Telegram didn't accept it. Try again."})
+            return
+        self.unmark.discard(cid)
+        log.info("marked a chat unread for later")
+        await self.reply({"type": "later", "chatId": cid, "ok": True})
+        await self.hub.broadcast()
 
     async def _transcribe(self, dictation: str, pcm: bytes) -> None:
         try:
@@ -238,7 +292,7 @@ class Session:
         def fail(human: str) -> dict:
             return {"type": "sent", "clientMsgId": client_id, "ok": False, "human": human}
 
-        cid = self._picked(msg.get("chatId"))
+        cid = await self.hub.allowed(msg.get("chatId"))
         text = (msg.get("text") or "").strip()[:MAX_TEXT] or None
         reaction = msg.get("reaction") if msg.get("reaction") in REACTIONS else None
         reply_to = msg.get("replyTo") if isinstance(msg.get("replyTo"), int) else None

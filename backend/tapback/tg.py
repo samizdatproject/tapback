@@ -12,22 +12,33 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 from telethon.tl.custom.dialog import Dialog
 from telethon.tl.functions.account import UpdateNotifySettingsRequest
 from telethon.tl.functions.messages import (
     GetPeerDialogsRequest,
     GetSponsoredMessagesRequest,
+    MarkDialogUnreadRequest,
     SendReactionRequest,
     ViewSponsoredMessageRequest,
 )
-from telethon.tl.types import InputNotifyPeer, InputPeerNotifySettings, ReactionEmoji
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    InputDialogPeer,
+    InputNotifyPeer,
+    InputPeerNotifySettings,
+    ReactionEmoji,
+    UpdateDialogUnreadMark,
+    User,
+)
 from telethon.tl.types.messages import SponsoredMessages
 
 from . import config, rules, session_store
 from .cards import build_card
 from .digest import strip_emoji, top_posts
+from .media import message_text
 from .settings import Settings, is_vip, keyword_pattern
 
 SPONSORED_CACHE_S = 300  # getSponsoredMessages: "The result must be cached for 5 minutes"
@@ -63,6 +74,27 @@ def chat_flag(dialog: Dialog, prefs: Settings | None = None) -> str:
     return "★" if is_vip(prefs, *names) else ""
 
 
+def breaks_through(entity, raw, prefs: Settings | None) -> bool:
+    """An unpicked chat that may reach the glasses (opt-in): it has unread messages and is either
+    a private chat with a VIP or a group that mentions me. Never a channel or an archived chat.
+
+    `raw` is the Telegram dialog (types.Dialog) with the counters and the folder.
+    """
+    if prefs is None or not prefs.breakthrough or raw is None or getattr(raw, "folder_id", None) == 1:
+        return False
+    unread = int(getattr(raw, "unread_count", 0) or 0) > 0
+    if isinstance(entity, User):
+        # A VIP chat the user kept for later (unread_mark) stays on the glasses until it's opened again.
+        if not (unread or getattr(raw, "unread_mark", False)):
+            return False
+        return not entity.is_self and is_vip(prefs, utils.get_display_name(entity), entity.username)
+    if not unread:
+        return False
+    if isinstance(entity, Chat) or (isinstance(entity, Channel) and entity.megagroup):
+        return int(getattr(raw, "unread_mentions_count", 0) or 0) > 0
+    return False
+
+
 def chat_row(dialog: Dialog, picked: set[str], prefs: Settings | None = None) -> dict:
     cid = str(dialog.id)
     return {
@@ -72,15 +104,10 @@ def chat_row(dialog: Dialog, picked: set[str], prefs: Settings | None = None) ->
         "unread": int(dialog.unread_count or 0),
         "flag": chat_flag(dialog, prefs),
         "picked": cid in picked,
+        # Marked unread in Telegram ("Later" on the glasses, or "Mark as unread" on the phone).
+        "later": bool(getattr(dialog.dialog, "unread_mark", False)),
+        "breakthrough": cid not in picked and breaks_through(dialog.entity, dialog.dialog, prefs),
     }
-
-
-def describe_media(msg) -> str:
-    for attr, label in (("photo", "photo"), ("video", "video"), ("voice", "voice message"), ("sticker", "sticker"),
-                        ("gif", "GIF"), ("document", "file"), ("poll", "poll"), ("geo", "location")):
-        if getattr(msg, attr, None):
-            return f"[{label}]"
-    return "[message]"
 
 
 def sender_name(msg) -> str:
@@ -115,6 +142,7 @@ class Telegram:
             raise SystemExit("The saved session is no longer valid. Run: python -m tapback login")
         self.client.add_event_handler(self._changed, events.NewMessage())
         self.client.add_event_handler(self._changed, events.MessageRead(inbox=True))
+        self.client.add_event_handler(self._changed, events.Raw(UpdateDialogUnreadMark))  # marked unread elsewhere
         await self.client.get_dialogs(limit=self._dialog_limit, archived=False)  # fills the entity cache
 
     async def stop(self) -> None:
@@ -158,12 +186,13 @@ class Telegram:
             self.client.get_messages(entity, limit=3),
         )
         unread = int(dialogs.dialogs[0].unread_count) if dialogs.dialogs else 0
+        later = bool(dialogs.dialogs[0].unread_mark) if dialogs.dialogs else False
         recent = [
             {
                 "id": msg.id,
                 "sender": "You" if msg.out else sender_name(msg),
                 "time": msg.date.astimezone().strftime("%H:%M"),
-                "text": msg.message or describe_media(msg),
+                "text": message_text(msg),
                 "mine": bool(msg.out),
                 "mentions_me": bool(msg.mentioned),
             }
@@ -176,6 +205,7 @@ class Telegram:
         card = build_card({"id": chat_id, "title": title or "(no name)", "kind": kind}, recent, unread)
         # Marked read only when the glasses report the card as displayed (card_shown).
         card["readMaxId"] = max((m["id"] for m in card["msgs"]), default=None)
+        card["later"] = later  # for the server only: card_shown clears the mark
         return card
 
     async def chat_kind(self, chat_id: str) -> str:
@@ -192,6 +222,19 @@ class Telegram:
             await self.client(SendReactionRequest(peer=entity, msg_id=reply_to, reaction=[ReactionEmoji(emoticon=reaction)]))
         else:
             await self.client.send_message(entity, text, reply_to=reply_to)
+
+    async def breakthrough(self, chat_id: str, prefs: Settings) -> bool:
+        """Re-checks on Telegram whether an unpicked chat breaks through right now."""
+        try:
+            entity = await self.client.get_entity(int(chat_id))
+        except ValueError:  # not a chat this account knows
+            return False
+        return breaks_through(entity, await self._dialog(entity), prefs)
+
+    async def mark_unread(self, chat_id: str, unread: bool) -> None:
+        """Telegram's own "Mark as unread" (messages.markDialogUnread): the state lives in Telegram."""
+        entity = await self.client.get_input_entity(int(chat_id))
+        await self.client(MarkDialogUnreadRequest(peer=InputDialogPeer(entity), unread=unread))
 
     async def mute(self, chat_id: str, minutes: int) -> None:
         entity = await self.client.get_input_entity(int(chat_id))
@@ -277,9 +320,11 @@ class Telegram:
             })
         return out
 
-    async def mark_read(self, chat_id: str, max_id: int) -> None:
+    async def mark_read(self, chat_id: str, max_id: int, clear_mentions: bool = False) -> None:
+        """clear_mentions: for a group that came through by an @mention, the mention was just shown,
+        so clear Telegram's mention counter too; otherwise every later message would break through."""
         entity = await self.client.get_entity(int(chat_id))
-        await self.client.send_read_acknowledge(entity, max_id=max_id)
+        await self.client.send_read_acknowledge(entity, max_id=max_id, clear_mentions=clear_mentions)
 
     async def log_out(self) -> bool:
         """Ends this Telegram session on Telegram's side (auth.logOut) and always wipes it locally.

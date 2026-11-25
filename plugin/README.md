@@ -73,7 +73,7 @@ src/
 - **Intro** (until paired): the app name, the "Unofficial Telegram client" notice,
   and how to pair. Double-tap opens the system exit dialog.
 - **Inbox** (root): the header shows live totals (`TapBack · 3 new in 2 chats`).
-  The list shows the picked chats with unread counts, and the footer shows
+  The list shows the picked chats (plus breakthrough chats, if turned on) with unread counts, and the footer shows
   connection state (`Offline · retrying…`). Double-tap opens the system exit
   dialog.
 - The list is never redrawn while you are looking at it, because a redraw would
@@ -82,13 +82,16 @@ src/
   on the phone, or coming back from a card, also redraws it.
 - **Inbox rows** for chats that mention you or match an urgent word start with
   `!`, and chats with a message from a VIP start with `★` (the server lists them
-  first). During quiet hours the header reads `Quiet until 08:00 · 3 new`. A channel row opens the Digest at that
+  first). A chat you didn't pick that came through by breakthrough starts with `+`.
+  A chat kept unread for later ends in `· later`; these come after the unread chats and
+  the header counts them (`TapBack · 2 for later`). During quiet hours the header reads `Quiet until 08:00 · 3 new`. A channel row opens the Digest at that
   channel.
 - **Card**: tap a chat to open its newest messages. The chat is marked read in
   Telegram only once the card is actually on the glasses. The body always fits the screen so swipes reach the app. Swipe ▼/▲
   goes to the next or previous chat with unread (channels are skipped), tap opens Quick replies, and
-  double-tap goes back to the Inbox. The glasses menu offers Mute chat 1h and
-  Snooze 30 min.
+  double-tap goes back to the Inbox. Swipes skip chats kept for later, since showing
+  their card clears the mark. The glasses menu offers Later: keep unread (marks the chat
+  unread in Telegram, then opens the next chat), Mute chat 1h and Snooze 30 min.
 - **Quick replies**: suggestions from the backend. Tap one to send it, or
   double-tap to go back to the card.
 - **Dictate**: hold (long press) on a card or Quick replies and speak; release to
